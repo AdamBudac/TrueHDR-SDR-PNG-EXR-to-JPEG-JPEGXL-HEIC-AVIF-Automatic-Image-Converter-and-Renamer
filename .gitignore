@@ -1,4 +1,34 @@
+# IDE specific
 .idea/
 .vscode/
-Releases/
 *.code-workspace
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Project specific
+Releases/
+render/
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# OS specific
+.DS_Store
+Thumbs.db

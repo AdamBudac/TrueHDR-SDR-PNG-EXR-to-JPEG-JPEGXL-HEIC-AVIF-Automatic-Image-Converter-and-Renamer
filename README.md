@@ -1,82 +1,79 @@
 # TrueHDR/SDR PNG/EXR to JPEG/JPEG XL/HEIC/AVIF Automatic Image Converter and Renamer
 
+Slovenský návod tu: [README-SK.md](README-SK.md)
+
 ## Overview
 
-This script is designed to automate the process of converting SDR PNG images exported from Lightroom and HDR PNG images exported from Photoshop into various image formats such as JPEG, JPEG XL, HEIC and AVIF for SDR and JPEG XL, HEIC and AVIF for HDR. It also renames and organizes these images into a logical and sequential order, together with HDR EXR images exported from Photoshop.
-
-## Motivation
-
-As a photographer excited for latest technologies, Sometimes, you may find JPEG insufficient in terms of compression artifacts in dark areas even in the best encoding quality, and flexibility in HDR details preservation. When I finish photo postprocessing in Lightroom and Photoshop, I export all images as SDR PNGs from Lightroom and some images, which might look astonishing in HDR, I export in HDR PNGs and HDR EXRs from Photoshop. I might end up with something like DSC4852.png (SDR), DSC4854_HDR.png, DSC4854_HDR.exr, and so on. Everybody like to have photos oraganized, but batch renamers dont't deliver the best output when it comes to determining filename together with _HDR suffix and multiple extensions and manual organizing can be time-consuming, especially when dealing with large batches of images. So I created this script, which will simplify and automate the conversion and renaming process, saving time and reducing the potential for errors, and you can focus on what you love - capturing more stunning images with the latest tools at your disposal.
+GUI application for converting, renaming, and sorting input PNG/EXR images in SDR and HDR formats into JPEG, JPEG XL, HEIC, and AVIF codecs.
 
 ## Features
 
-- **Automatic Renaming:** The script renames images with a user-defined prefix and ensures consistent numbering, even across HDR and SDR images.
-- **Format Conversion:** Converts images to JPEG, JPEG XL, HEIC and AVIF formats using configurable quality settings.
-- **HDR Support:** Handles HDR images by renaming associated `_HDR.png` and `_HDR.exr` files and converting them with appropriate settings.
-- **User Settings:** Allows users to save their preferred settings, which can be automatically loaded in future runs.
-- **Interactive Directory Selection:** The script prompts the user to select the directory containing images, starting from the last used directory or the script's directory if no previous selection exists.
+- Renaming with prefix, numbering, auto/manual zerofill; HDR gets the `_HDR` suffix, copies get `_DuplicateXX`
+- Separate SDR/HDR processing; EXR pairs to HDR PNG by order
+- Detects availability of tools (`ffmpeg`, `cjpeg`, `cjxl`, `heif-enc`, `avifenc`) and auto-disables missing codec checkboxes
+- Logs to `output/logging.log`; rename map in `output/rename.log` (`old.ext -> new.ext`)
+- Saves settings to `%LOCALAPPDATA%`
 
-## Prerequisites
+## Requirements
 
-Before running the script, make sure you have the following tools installed:
-
-- **Python 3.x:** Ensure Python is installed and added to your system's PATH.
-- **ffmpeg:** Required for image conversion. Make sure ffmpeg is installed and accessible from the command line.
-- **cjpeg:** A utility from the `libjpeg-turbo` package, used for converting images to JPEG format.
-- **cjxl:** Part of the `libjxl` reference implementation, used for encoding JPEG XL images.
-- **heif-enc:** Part of the `libheif` tools, used for encoding HEIC images.
-- **avifenc:** Part of the `libavif` tools, used for encoding AVIF images.
+- **Python 3.12**
+- **Python packages:**
+    - `PySide6>=6.6`
+    - `pytest>=7.4`
+    - `pyinstaller>=6.3` (EXE build only)
+- **External tools in PATH:**
+    - `ffmpeg` – image conversion
+    - `cjpeg` – from `libjpeg-turbo` for JPEG export
+    - `cjxl` – part of `libjxl` for JPEG XL export
+    - `heif-enc` – from `libheif` for HEIC export
+    - `avifenc` – from `libavif` for AVIF export
 
 ## Installation
 
-1. Clone or Download the Script
-
-2. Ensure all prerequisites are installed and accessible from your command line. 
-
-3. Navigate to the directory containing the script and run it using Python  
-
+1) Install [Python 3.12](https://www.python.org/)  
+2) Install required dependencies:
 ```bash
-cd path/to/your/script
-python script.py
+pip install -r requirements.txt
 ```
+
+## Build (PyInstaller)
+
+Windows example:
+```bash
+python -m PyInstaller --noconfirm --clean --noconsole --onefile --name TrueHDRConverter script.py
+```
+Result in `dist/TrueHDRConverter.exe`.
 
 ## Usage
 
-### Command-Line Usage
+- CLI: `python script.py`
+- Compiled EXE: `TrueHDRConverter.exe`
+- GUI:
+    - **Load/Save settings**: as needed
+    - **Load images**: pick the directory with images
+    - **Configure renaming**: name, counter, zerofill auto/manual, HDR/SDR
+    - **Select codecs**: JPEG/JPEG XL/HEIC/AVIF codecs and quality per codec
+    - **Processing**: run conversion, shows progress and status
 
-You can run the script from the command line with customizable arguments. The script supports the following options:
+## Behavior
 
-- `--prefix`: Filename prefix for output files (default: `"Photo "`)
-- `--jpeg`: Quality setting for JPEG encoding (0 - 100, default: `95`)
-- `--jpegxl`: Quality setting for JPEG XL encoding (0 - 100, default: `99`)
-- `--heic`: Quality setting for HEIC encoding (0 - 100, default: `99`)
-- `--avif`: Quality setting for AVIF encoding (0 - 100, default: `99`)
+- On start, loads settings from `%LOCALAPPDATA%/TrueHDRConverter/settings.json` (falls back to defaults)
+- After selecting a working directory, it creates `output/`, copies all `.png` and `.exr` from the root of that directory into `output/`, and works only there
+- When renaming, it writes `output/rename.log` line by line as `old.ext -> new.ext`; error/info logs go to `output/logging.log`
+- An overwrite dialog appears if `output/` is not empty
 
-**Example:**
+## Tests
 
-```bash
-python script.py --prefix "Image_" --jpeg 95 --jpegxl 99 --heic 99 --avif 99
-```
-
-### Running from Explorer ###
-You can run the script directly from Explorer by double-clicking on it.
-
-### Directory Selection ###
-When the script is executed, it will prompt you to select the directory containing your images. By default, it will start in the directory where the script is located.
-
-### Saving User Settings ###
-If you ran the script from command lite, your user setting will be stored in `user_settings.json` file inside script's directory. These settings will be loaded automatically the next time you run the script, if you don't enter new ones.
-
+- See `tests/README.md` for unit/integration instructions
 
 ## References
 
-- [ffmpeg](https://www.ffmpeg.org/) v7.1.1-full
-- [libjpeg-turbo](https://libjpeg-turbo.org/) v3.1.0-vc64
-- [libavif](https://github.com/AOMediaCodec/libavif) v1.2.1 x64
+- [ffmpeg](https://www.ffmpeg.org/) v8.0.1-full
+- [libjpeg-turbo](https://github.com/libjpeg-turbo/libjpeg-turbo) v3.1.3-vc-x64
 - [libjxl](https://github.com/libjxl/libjxl) v0.11.1 x64
+- [libheif](https://github.com/strukturag/libheif) v1.19.5 x64
+- [libavif](https://github.com/AOMediaCodec/libavif) v1.3.0 x64
 
 ## License
 
-I hope that this script will help you to make your images easily organized and available in HDR formats.
-
-Feel free to use and update its functionality by your desired needs.
+Free

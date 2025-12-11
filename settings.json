@@ -1,0 +1,24 @@
+{
+    "rename_enabled": true,
+    "prefix": "Image_",
+    "counter_enabled": true,
+    "start_counter": 1,
+    "zero_fill_enabled": true,
+    "zero_fill_mode": "auto",
+    "zero_fill_digits": 1,
+    "sdr_enabled": true,
+    "hdr_enabled": true,
+    "last_input_dir": null,
+    "codec_enabled": {
+        "jpeg": true,
+        "jpegxl": true,
+        "heic": true,
+        "avif": true
+    },
+    "codec_quality": {
+        "jpeg": 95,
+        "jpegxl": 99,
+        "heic": 99,
+        "avif": 99
+    }
+}
