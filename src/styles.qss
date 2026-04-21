@@ -1,0 +1,9 @@
+/* TrueHDR Converter – Qt Stylesheet
+ *
+ * This file is loaded at application start.
+ * Palette-dependent colours (e.g. status label foreground) are still set
+ * programmatically in gui.py because QSS does not support palette queries.
+ *
+ * NOTE: Currently empty to preserve the 100% native Windows OS look and feel.
+ */
+

@@ -1,53 +1,92 @@
 from pathlib import Path
 import logging
-import sys
+from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from script import AppSettings, ProcessingWorker, detect_tools  # noqa: E402
+from src.models import AppSettings
+from src.config import detect_tools
+from src.worker import ProcessingWorker
 
 
-def main() -> int:
-    # Input directory with source PNG/EXR files
-    input_dir = Path("render").resolve()
-    if not input_dir.exists():
-        print(f"Input directory not found: {input_dir}")
-        return 1
+def fake_convert_sdr(png_file: Path, settings: AppSettings, tool_map: dict, runner, logger: logging.Logger):
+    """Mock implementation that just creates dummy output files."""
+    stem = png_file.with_suffix("")
+    codecs = {"jpeg": ".jpg", "jpegxl": ".jxl", "heic": ".heic", "avif": ".avif"}
+    for codec, ext in codecs.items():
+        if settings.codec_enabled.get(codec):
+            stem.with_suffix(ext).touch()
 
-    # Prepare logger to stdout
-    logger = logging.getLogger("headless-test")
-    logger.setLevel(logging.INFO)
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-    logger.addHandler(handler)
 
-    # Use default settings (or adjust here if needed)
+def fake_convert_hdr(png_file: Path, settings: AppSettings, tool_map: dict, runner, logger: logging.Logger):
+    """Mock implementation for HDR that creates dummy output files."""
+    stem = png_file.with_suffix("")
+    codecs = {"jpegxl": ".jxl", "heic": ".heic", "avif": ".avif"}
+    for codec, ext in codecs.items():
+        if settings.codec_enabled.get(codec):
+            stem.with_suffix(ext).touch()
+
+
+def test_full_pipeline_integration(tmp_path: Path):
+    """
+    End-to-end integration test of the ProcessingWorker pipeline.
+    It mocks the actual external tool calls (ffmpeg, cjpeg...) to test
+    the file discovery, renaming, sorting, and callback logic.
+    """
+    # 1. Prepare dummy input files
+    (tmp_path / "photo_a.png").write_bytes(b"dummy")
+    (tmp_path / "photo_b_HDR.png").write_bytes(b"dummy")
+    (tmp_path / "photo_b_HDR.exr").write_bytes(b"dummy")
+    
+    # 2. Setup logger
+    logger = logging.getLogger("test-integration")
+    logger.addHandler(logging.NullHandler())
+
+    # 3. App Settings configured for renaming
     settings = AppSettings()
-    tool_map = detect_tools()
+    settings.rename_enabled = True
+    settings.prefix = "TestImage_"
+    settings.start_counter = 1
+    settings.zero_fill_mode = "manual"
+    settings.zero_fill_digits = 3
+    # Enable a few codecs
+    settings.codec_enabled = {"jpeg": True, "jpegxl": True, "heic": False, "avif": False}
 
-    # Clear output if exists (to avoid collisions during repeated runs)
-    output_dir = input_dir / "output"
-    if output_dir.exists():
-        for item in output_dir.iterdir():
-            if item.is_file() or item.is_symlink():
-                item.unlink(missing_ok=True)
-            else:
-                # best-effort cleanup of subdirs if any
-                import shutil
-                shutil.rmtree(item, ignore_errors=True)
+    # We don't care about actual tools in this mock test, so pretend all are missing 
+    # except we bypass the check via our mock anyway.
+    tool_map = {}
 
-    worker = ProcessingWorker(input_dir, settings, tool_map, logger)
-    try:
+    # 4. Initialize worker
+    worker = ProcessingWorker(tmp_path, settings, tool_map, logger)
+
+    # 5. Patch the expensive / external operations
+    with patch("src.worker.convert_sdr", side_effect=fake_convert_sdr), \
+         patch("src.worker.convert_hdr", side_effect=fake_convert_hdr):
+        
+        # Run pipeline
         worker.process()
-        print("Headless conversion completed.")
-        return 0
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Headless conversion failed: %s", exc)
-        return 2
 
+    # 6. Verify outputs
+    output_dir = tmp_path / "output"
+    assert output_dir.exists()
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+    # We expect renamed files based on settings:
+    # photo_a.png -> TestImage_001.png -> TestImage_001.jpg, TestImage_001.jxl
+    # photo_b_HDR.png -> TestImage_002_HDR.png -> TestImage_002_HDR.jxl (no jpeg for HDR)
+    # photo_b_HDR.exr -> TestImage_002_HDR.exr
 
+    assert (output_dir / "TestImage_001.png").exists()
+    assert (output_dir / "TestImage_001.jpg").exists()
+    assert (output_dir / "TestImage_001.jxl").exists()
+
+    assert (output_dir / "TestImage_002_HDR.png").exists()
+    assert (output_dir / "TestImage_002_HDR.jxl").exists()
+    assert not (output_dir / "TestImage_002_HDR.jpg").exists()  # HDR doesn't produce jpeg
+    
+    assert (output_dir / "TestImage_002_HDR.exr").exists()
+
+    # Verify rename.log was generated
+    rename_log = output_dir / "rename.log"
+    assert rename_log.exists()
+    log_content = rename_log.read_text("utf-8")
+    assert "photo_a.png -> TestImage_001.png" in log_content
+    assert "photo_b_HDR.png -> TestImage_002_HDR.png" in log_content
+    assert "photo_b_HDR.exr -> TestImage_002_HDR.exr" in log_content
