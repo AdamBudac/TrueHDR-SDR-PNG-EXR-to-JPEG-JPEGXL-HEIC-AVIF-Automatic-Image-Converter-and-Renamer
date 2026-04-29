@@ -4,7 +4,7 @@ English guide here: [README.md](README.md)
 
 ## Popis
 
-GUI a CLI aplikácia pre konverziu, premenovanie a zoradenie vstupných PNG/EXR obrázkov v SDR a HDR formátoch do JPEG, JPEG XL, HEIC a AVIF kodekov.
+GUI a CLI aplikácia pre konverziu, premenovanie a zoradenie vstupných PNG/EXR/JPG HDR obrázkov v SDR a HDR formátoch do JPEG, JPEG XL, HEIC a AVIF kodekov.
 
 ## Funkcie
 
@@ -15,6 +15,7 @@ GUI a CLI aplikácia pre konverziu, premenovanie a zoradenie vstupných PNG/EXR 
 - Tlačidlo Stop pre prerušenie spracovania kedykoľvek počas behu
 - Plnohodnotné CLI rozhranie s `argparse` pre automatizáciu / skriptovanie
 - Logy v `output/logging.log`; mapa premenovaní v `output/rename.log` (`old.ext -> new.ext`)
+- HDR JPEG/JPG súbory (s príponou `_HDR`) sú skopírované a premenované spolu s ich HDR PNG náprotivkami (nie sú konvertované, pretože ich nie je možné vhodne prekódovať)
 - Uloženie nastavení do `%APPDATA%`
 
 ## Štruktúra projektu
@@ -112,11 +113,15 @@ Súbory sú klasifikované na základe ich prípon a suffixov v názve (nezávis
 | `photo-2_HDR.png`, `photo_BW_HDR.png` | HDR Čiernobiele (BW)  |
 | `photo_HDR.exr`                       | HDR Farebné (EXR)     |
 | `photo-2_HDR.exr`, `photo_BW_HDR.exr` | HDR Čiernobiele (EXR) |
+| `photo_HDR.jpg`                       | HDR Farebné (JPG)     |
+| `photo-2_HDR.jpg`, `photo_BW_HDR.jpg` | HDR Čiernobiele (JPG) |
+
+EXR a JPG/JPEG HDR súbory nie sú konvertované — sú iba skopírované a premenované tak, aby zodpovedali ich HDR PNG náprotivkám. Ne-HDR JPEG súbory vo vstupnom priečinku sú ignorované.
 
 ## Správanie
 
 - Pri štarte hľadá aplikácia nastavenia najprv v `data/settings.json` (portable režim). Ak ich nenájde, načíta z `%APPDATA%/TrueHDRConverter/settings.json` (s fallbackom na predvolené nastavenia).
-- Po výbere pracovného priečinka vytvorí zložku `output/`, skopíruje všetky `.png` a `.exr` z koreňa tohto priečinka do `output/` a pracuje výlučne tam.
+- Po výbere pracovného priečinka vytvorí zložku `output/`, skopíruje všetky `.png`, `.exr` a HDR `.jpg`/`.jpeg` súbory z koreňa tohto priečinka do `output/` a pracuje výlučne tam.
 - Pri premenovávaní zapisuje riadok po riadku do `output/rename.log` vo formáte `old.ext -> new.ext`; chybové a informačné logy sa ukladajú do `output/logging.log`.
 - Ak zložka `output/` nie je prázdna, zobrazí sa dialóg pre prepísanie súborov (overwrite).
 - Stlačenie tlačidla **Stop** okamžite ukončí všetky bežiace konverzné procesy (agresívne zrušenie).

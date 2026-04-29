@@ -35,6 +35,8 @@ def test_full_pipeline_integration(tmp_path: Path):
     (tmp_path / "photo_a.png").write_bytes(b"dummy")
     (tmp_path / "photo_b_HDR.png").write_bytes(b"dummy")
     (tmp_path / "photo_b_HDR.exr").write_bytes(b"dummy")
+    (tmp_path / "photo_b_HDR.jpg").write_bytes(b"dummy")       # JPG HDR file
+    (tmp_path / "unrelated.jpg").write_bytes(b"notHDR")         # non-HDR JPEG – should be ignored
     
     # 2. Setup logger
     logger = logging.getLogger("test-integration")
@@ -72,6 +74,7 @@ def test_full_pipeline_integration(tmp_path: Path):
     # photo_a.png -> TestImage_001.png -> TestImage_001.jpg, TestImage_001.jxl
     # photo_b_HDR.png -> TestImage_002_HDR.png -> TestImage_002_HDR.jxl (no jpeg for HDR)
     # photo_b_HDR.exr -> TestImage_002_HDR.exr
+    # photo_b_HDR.jpg -> TestImage_002_HDR.jpg  (renamed to match HDR PNG)
 
     assert (output_dir / "TestImage_001.png").exists()
     assert (output_dir / "TestImage_001.jpg").exists()
@@ -79,9 +82,14 @@ def test_full_pipeline_integration(tmp_path: Path):
 
     assert (output_dir / "TestImage_002_HDR.png").exists()
     assert (output_dir / "TestImage_002_HDR.jxl").exists()
-    assert not (output_dir / "TestImage_002_HDR.jpg").exists()  # HDR doesn't produce jpeg
     
     assert (output_dir / "TestImage_002_HDR.exr").exists()
+
+    # JPG HDR file should be renamed to match the HDR PNG counterpart
+    assert (output_dir / "TestImage_002_HDR.jpg").exists()
+
+    # Non-HDR JPEG should NOT be copied
+    assert not (output_dir / "unrelated.jpg").exists()
 
     # Verify rename.log was generated
     rename_log = output_dir / "rename.log"
@@ -90,3 +98,5 @@ def test_full_pipeline_integration(tmp_path: Path):
     assert "photo_a.png -> TestImage_001.png" in log_content
     assert "photo_b_HDR.png -> TestImage_002_HDR.png" in log_content
     assert "photo_b_HDR.exr -> TestImage_002_HDR.exr" in log_content
+    assert "photo_b_HDR.jpg -> TestImage_002_HDR.jpg" in log_content
+

@@ -34,18 +34,23 @@ def test_settings_from_dict_clamps_quality():
 def test_copy_source_files(tmp_path: Path):
     (tmp_path / "image.png").write_bytes(b"fake")
     (tmp_path / "image_HDR.exr").write_bytes(b"fakeexr")
+    (tmp_path / "image_HDR.jpg").write_bytes(b"fakejpg")
     (tmp_path / "ignore.txt").write_text("x")
+    (tmp_path / "sdr_photo.jpg").write_bytes(b"sdrjpg")  # non-HDR JPEG – should be ignored
     output_dir = tmp_path / "output"
     output_dir.mkdir()
     logger = logging.getLogger("test_copy")
     logger.addHandler(logging.NullHandler())
 
-    png_files, exr_files = copy_source_files(tmp_path, output_dir, logger)
+    png_files, exr_files, jpg_hdr_files = copy_source_files(tmp_path, output_dir, logger)
 
     assert len(png_files) == 1
     assert len(exr_files) == 1
+    assert len(jpg_hdr_files) == 1
     assert (output_dir / "image.png").exists()
     assert (output_dir / "image_HDR.exr").exists()
+    assert (output_dir / "image_HDR.jpg").exists()
+    assert not (output_dir / "sdr_photo.jpg").exists()  # non-HDR JPEG not copied
 
 
 # ---------------------------------------------------------------------------
@@ -136,3 +141,77 @@ def test_classify_files_groups():
     assert len(result.sdr_bw_groups["photo"]) == 2   # -2 and _BW
     assert len(result.hdr_color_groups["photo"]) == 1
     assert len(result.hdr_bw_groups["photo"]) == 2   # -2_HDR and _bw_hdr
+
+
+# ---------------------------------------------------------------------------
+# New tests – JPG HDR classification
+# ---------------------------------------------------------------------------
+
+def test_classify_files_jpg_hdr():
+    """Verify that classify_files groups JPG HDR files by base name."""
+    files = [Path("photo_HDR.png")]
+    exr = [Path("photo_HDR.exr")]
+    jpg_hdr = [Path("photo_HDR.jpg")]
+
+    result = classify_files(files, exr, jpg_hdr)
+
+    assert "photo" in result.jpg_hdr_groups
+    assert len(result.jpg_hdr_groups["photo"]) == 1
+    assert "photo" in result.exr_groups
+    assert len(result.exr_groups["photo"]) == 1
+
+
+def test_classify_files_jpg_hdr_bw():
+    """JPG HDR files with _BW suffix are grouped under the correct base."""
+    files = [Path("photo_BW_HDR.png")]
+    jpg_hdr = [Path("photo_BW_HDR.jpg"), Path("photo-2_HDR.jpeg")]
+
+    result = classify_files(files, [], jpg_hdr)
+
+    assert "photo" in result.jpg_hdr_groups
+    assert len(result.jpg_hdr_groups["photo"]) == 2
+
+
+def test_classify_files_jpg_hdr_case_insensitive():
+    """JPG HDR classification is case-insensitive for _HDR suffix."""
+    files = [Path("photo_hdr.png")]
+    jpg_hdr = [Path("photo_hdr.jpg")]
+
+    result = classify_files(files, [], jpg_hdr)
+
+    assert "photo" in result.jpg_hdr_groups
+    assert len(result.jpg_hdr_groups["photo"]) == 1
+
+
+def test_copy_source_files_ignores_non_hdr_jpeg(tmp_path: Path):
+    """Non-HDR JPEG files are not copied to the output directory."""
+    (tmp_path / "photo.png").write_bytes(b"fake")
+    (tmp_path / "normal.jpg").write_bytes(b"notHDR")
+    (tmp_path / "normal.jpeg").write_bytes(b"notHDR2")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    logger = logging.getLogger("test_ignore_sdr_jpeg")
+    logger.addHandler(logging.NullHandler())
+
+    _, _, jpg_hdr_files = copy_source_files(tmp_path, output_dir, logger)
+
+    assert len(jpg_hdr_files) == 0
+    assert not (output_dir / "normal.jpg").exists()
+    assert not (output_dir / "normal.jpeg").exists()
+
+
+def test_copy_source_files_copies_hdr_jpeg(tmp_path: Path):
+    """HDR JPEG files (with _HDR in stem) are copied to the output directory."""
+    (tmp_path / "photo.png").write_bytes(b"fake")
+    (tmp_path / "photo_HDR.jpg").write_bytes(b"hdrjpg")
+    (tmp_path / "photo_hdr.jpeg").write_bytes(b"hdrjpeg")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    logger = logging.getLogger("test_copy_hdr_jpeg")
+    logger.addHandler(logging.NullHandler())
+
+    _, _, jpg_hdr_files = copy_source_files(tmp_path, output_dir, logger)
+
+    assert len(jpg_hdr_files) == 2
+    assert (output_dir / "photo_HDR.jpg").exists()
+    assert (output_dir / "photo_hdr.jpeg").exists()

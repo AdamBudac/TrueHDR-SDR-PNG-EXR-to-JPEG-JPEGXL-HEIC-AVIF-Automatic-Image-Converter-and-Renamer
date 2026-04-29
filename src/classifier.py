@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from src.models import ImageType
 
@@ -104,6 +104,7 @@ class ClassifiedImages:
     hdr_color_groups: Dict[str, List[Path]] = field(default_factory=dict)
     hdr_bw_groups: Dict[str, List[Path]] = field(default_factory=dict)
     exr_groups: Dict[str, List[Path]] = field(default_factory=dict)
+    jpg_hdr_groups: Dict[str, List[Path]] = field(default_factory=dict)
 
     @property
     def unique_bases(self) -> List[str]:
@@ -133,9 +134,11 @@ class ClassifiedImages:
 
 
 def classify_files(
-    png_files: List[Path], exr_files: List[Path]
+    png_files: List[Path],
+    exr_files: List[Path],
+    jpg_hdr_files: Optional[List[Path]] = None,
 ) -> ClassifiedImages:
-    """Classify *png_files* and *exr_files* into groups by base name and type."""
+    """Classify *png_files*, *exr_files*, and *jpg_hdr_files* into groups by base name and type."""
     result = ClassifiedImages()
 
     for p in png_files:
@@ -154,5 +157,11 @@ def classify_files(
         raw_stem = _HDR_RE.sub("", e.stem)
         base, _ = normalize_base(raw_stem)
         result.exr_groups.setdefault(base, []).append(e)
+
+    for j in (jpg_hdr_files or []):
+        # JPG HDR files are always HDR; strip _HDR if present before grouping
+        raw_stem = _HDR_RE.sub("", j.stem)
+        base, _ = normalize_base(raw_stem)
+        result.jpg_hdr_groups.setdefault(base, []).append(j)
 
     return result

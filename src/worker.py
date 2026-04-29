@@ -37,28 +37,42 @@ class CancelledException(Exception):
 # File-copy helper
 # ---------------------------------------------------------------------------
 
+# Regex to detect _HDR in a filename stem (case-insensitive)
+_HDR_DETECT_RE = __import__("re").compile(r"_HDR", __import__("re").IGNORECASE)
+
+
 def copy_source_files(
     src_dir: Path, output_dir: Path, logger: logging.Logger
-) -> Tuple[List[Path], List[Path]]:
-    """Copy ``.png`` and ``.exr`` files from *src_dir* into *output_dir*.
+) -> Tuple[List[Path], List[Path], List[Path]]:
+    """Copy ``.png``, ``.exr``, and HDR ``.jpg``/``.jpeg`` files from *src_dir* into *output_dir*.
 
-    Returns ``(png_files, exr_files)`` — paths inside *output_dir*.
+    Returns ``(png_files, exr_files, jpg_hdr_files)`` — paths inside *output_dir*.
+    Only ``.jpg``/``.jpeg`` files whose stem contains ``_HDR`` (case-insensitive)
+    are treated as HDR sources; other JPEGs are ignored.
     """
     png_files: List[Path] = []
     exr_files: List[Path] = []
+    jpg_hdr_files: List[Path] = []
     for item in src_dir.iterdir():
-        if item.is_file() and item.suffix.lower() in {".png", ".exr"}:
+        if not item.is_file():
+            continue
+        ext = item.suffix.lower()
+        if ext in {".png", ".exr"}:
             dest = output_dir / item.name
             shutil.copy2(item, dest)
-            if dest.suffix.lower() == ".png":
+            if ext == ".png":
                 png_files.append(dest)
             else:
                 exr_files.append(dest)
+        elif ext in {".jpg", ".jpeg"} and _HDR_DETECT_RE.search(item.stem):
+            dest = output_dir / item.name
+            shutil.copy2(item, dest)
+            jpg_hdr_files.append(dest)
     logger.info(
-        "Copied %s PNG and %s EXR into %s",
-        len(png_files), len(exr_files), output_dir,
+        "Copied %s PNG, %s EXR and %s JPG HDR into %s",
+        len(png_files), len(exr_files), len(jpg_hdr_files), output_dir,
     )
-    return png_files, exr_files
+    return png_files, exr_files, jpg_hdr_files
 
 
 # ---------------------------------------------------------------------------
@@ -132,11 +146,12 @@ class ProcessingWorker(QThread):
         self._check_cancelled()
 
         # 1. Copy -----------------------------------------------------------
-        png_files, exr_files = copy_source_files(
+        png_files, exr_files, jpg_hdr_files = copy_source_files(
             self.input_dir, output_dir, self.logger,
         )
         png_files = sorted(png_files, key=lambda p: p.name.lower())
         exr_files = sorted(exr_files, key=lambda p: p.name.lower())
+        jpg_hdr_files = sorted(jpg_hdr_files, key=lambda p: p.name.lower())
         if not png_files:
             self.emit_status("No PNG files found", "warning")
             return
@@ -144,7 +159,7 @@ class ProcessingWorker(QThread):
         self._check_cancelled()
 
         # 2. Classify -------------------------------------------------------
-        classified = classify_files(png_files, exr_files)
+        classified = classify_files(png_files, exr_files, jpg_hdr_files)
 
         # 3. Rename ---------------------------------------------------------
         plan = build_rename_plan(classified, self.settings, self.logger)
@@ -156,8 +171,9 @@ class ProcessingWorker(QThread):
         # new path and type for each file after rename).
         renamed_map: Dict[Path, RenamePlan] = {e.source: e for e in executed}
 
-        # Also rename matched EXR files alongside their HDR counterparts
+        # Also rename matched EXR and JPG HDR files alongside their HDR counterparts
         self._rename_exr_files(classified, executed, output_dir, rename_log_path)
+        self._rename_jpg_hdr_files(classified, executed, output_dir, rename_log_path)
 
         # 4. Convert --------------------------------------------------------
         total = classified.total_png_count
@@ -192,6 +208,56 @@ class ProcessingWorker(QThread):
                     processed += 1
                     self.progress.emit(processed, total)
 
+    def _build_hdr_stem_map(
+        self, executed: List[RenamePlan]
+    ) -> Dict[str, List[str]]:
+        """Build mapping: base -> list of new stems for HDR files (ordered)."""
+        hdr_new_stems: Dict[str, List[str]] = {}
+        for entry in executed:
+            if entry.image_type.is_hdr:
+                from src.classifier import normalize_base as _nb
+                original_base, _ = _nb(entry.source.stem)
+                hdr_new_stems.setdefault(original_base, []).append(
+                    entry.target.stem
+                )
+        return hdr_new_stems
+
+    def _rename_companion_files(
+        self,
+        groups: Dict[str, List[Path]],
+        hdr_new_stems: Dict[str, List[str]],
+        output_dir: Path,
+        rename_log_path: Path,
+        file_label: str,
+    ) -> None:
+        """Rename companion files (EXR or JPG HDR) to match their HDR PNG counterparts."""
+        for base, file_list in groups.items():
+            new_stems = hdr_new_stems.get(base, [])
+            for dup_idx, src in enumerate(
+                sorted(file_list, key=lambda p: p.name.lower())
+            ):
+                if dup_idx >= len(new_stems):
+                    break
+                dst = output_dir / f"{new_stems[dup_idx]}{src.suffix}"
+                if dst.exists():
+                    self.logger.warning(
+                        "%s target exists, skipping: %s -> %s",
+                        file_label, src.name, dst.name,
+                    )
+                    continue
+                try:
+                    src.rename(dst)
+                    try:
+                        with rename_log_path.open("a", encoding="utf-8") as f:
+                            f.write(f"{src.name} -> {dst.name}\n")
+                    except Exception:
+                        pass
+                except FileNotFoundError:
+                    self.logger.warning(
+                        "%s source missing during rename: %s",
+                        file_label, src,
+                    )
+
     def _rename_exr_files(
         self,
         classified,
@@ -200,39 +266,20 @@ class ProcessingWorker(QThread):
         rename_log_path: Path,
     ) -> None:
         """Rename EXR files to match their HDR PNG counterparts."""
-        # Build mapping: base -> list of new stems for HDR files (ordered)
-        hdr_new_stems: Dict[str, List[str]] = {}
-        for entry in executed:
-            if entry.image_type.is_hdr:
-                # Find the original base that this entry belonged to
-                from src.classifier import normalize_base as _nb
-                original_base, _ = _nb(entry.source.stem)
-                hdr_new_stems.setdefault(original_base, []).append(
-                    entry.target.stem
-                )
+        hdr_new_stems = self._build_hdr_stem_map(executed)
+        self._rename_companion_files(
+            classified.exr_groups, hdr_new_stems, output_dir, rename_log_path, "EXR",
+        )
 
-        for base, exr_list in classified.exr_groups.items():
-            new_stems = hdr_new_stems.get(base, [])
-            for dup_idx, exr_src in enumerate(
-                sorted(exr_list, key=lambda p: p.name.lower())
-            ):
-                if dup_idx >= len(new_stems):
-                    break
-                exr_dst = output_dir / f"{new_stems[dup_idx]}.exr"
-                if exr_dst.exists():
-                    self.logger.warning(
-                        "EXR target exists, skipping: %s -> %s",
-                        exr_src.name, exr_dst.name,
-                    )
-                    continue
-                try:
-                    exr_src.rename(exr_dst)
-                    try:
-                        with rename_log_path.open("a", encoding="utf-8") as f:
-                            f.write(f"{exr_src.name} -> {exr_dst.name}\n")
-                    except Exception:
-                        pass
-                except FileNotFoundError:
-                    self.logger.warning(
-                        "EXR source missing during rename: %s", exr_src,
-                    )
+    def _rename_jpg_hdr_files(
+        self,
+        classified,
+        executed: List[RenamePlan],
+        output_dir: Path,
+        rename_log_path: Path,
+    ) -> None:
+        """Rename JPG HDR files to match their HDR PNG counterparts."""
+        hdr_new_stems = self._build_hdr_stem_map(executed)
+        self._rename_companion_files(
+            classified.jpg_hdr_groups, hdr_new_stems, output_dir, rename_log_path, "JPG HDR",
+        )

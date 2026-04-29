@@ -4,7 +4,7 @@ Slovenský návod tu: [README-SK.md](README-SK.md)
 
 ## Overview
 
-GUI and CLI application for converting, renaming, and sorting input PNG/EXR images in SDR and HDR formats into JPEG, JPEG XL, HEIC, and AVIF codecs.
+GUI and CLI application for converting, renaming, and sorting input PNG/EXR/JPG HDR images in SDR and HDR formats into JPEG, JPEG XL, HEIC, and AVIF codecs.
 
 ## Features
 
@@ -15,6 +15,7 @@ GUI and CLI application for converting, renaming, and sorting input PNG/EXR imag
 - Stop button to cancel processing mid-run
 - Full CLI interface with argparse for automation / scripting
 - Logs to `output/logging.log`; rename map in `output/rename.log` (`old.ext -> new.ext`)
+- HDR JPEG/JPG files (with `_HDR` suffix) are copied and renamed alongside their HDR PNG counterparts (not converted, as they cannot be suitably re-encoded)
 - Saves settings to `%APPDATA%`
 
 ## Project Structure
@@ -112,11 +113,15 @@ Files are classified by their filename suffixes (case-insensitive):
 | `photo-2_HDR.png`, `photo_BW_HDR.png` | HDR Black & White       |
 | `photo_HDR.exr`                       | HDR Color (EXR)         |
 | `photo-2_HDR.exr`, `photo_BW_HDR.exr` | HDR Black & White (EXR) |
+| `photo_HDR.jpg`                       | HDR Color (JPG)         |
+| `photo-2_HDR.jpg`, `photo_BW_HDR.jpg` | HDR Black & White (JPG) |
+
+EXR and JPG/JPEG HDR files are not converted — they are only copied and renamed to match their HDR PNG counterparts. Non-HDR JPEG files in the input directory are ignored.
 
 ## Behavior
 
 - On start, the app looks for settings in `data/settings.json` (portable mode). If not found, it loads from `%APPDATA%/TrueHDRConverter/settings.json` (falls back to defaults).
-- After selecting a working directory, it creates `output/`, copies all `.png` and `.exr` from the root of that directory into `output/`, and works only there
+- After selecting a working directory, it creates `output/`, copies all `.png`, `.exr`, and HDR `.jpg`/`.jpeg` files from the root of that directory into `output/`, and works only there
 - When renaming, it writes `output/rename.log` line by line as `old.ext -> new.ext`; error/info logs go to `output/logging.log`
 - An overwrite dialog appears if `output/` is not empty
 - Pressing **Stop** immediately terminates any running conversion processes (aggressive cancellation)
