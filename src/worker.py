@@ -210,53 +210,80 @@ class ProcessingWorker(QThread):
 
     def _build_hdr_stem_map(
         self, executed: List[RenamePlan]
-    ) -> Dict[str, List[str]]:
-        """Build mapping: base -> list of new stems for HDR files (ordered)."""
-        hdr_new_stems: Dict[str, List[str]] = {}
+    ) -> Dict[str, Dict[ImageType, List[str]]]:
+        """Build mapping: base -> {ImageType -> list of new stems} for HDR files.
+
+        Separates Color and BW stems so that companion files can be
+        matched to the correct type rather than relying on positional order.
+        """
+        hdr_new_stems: Dict[str, Dict[ImageType, List[str]]] = {}
         for entry in executed:
             if entry.image_type.is_hdr:
                 from src.classifier import normalize_base as _nb
                 original_base, _ = _nb(entry.source.stem)
-                hdr_new_stems.setdefault(original_base, []).append(
-                    entry.target.stem
-                )
+                hdr_new_stems.setdefault(original_base, {}).setdefault(
+                    entry.image_type, []
+                ).append(entry.target.stem)
         return hdr_new_stems
 
     def _rename_companion_files(
         self,
         groups: Dict[str, List[Path]],
-        hdr_new_stems: Dict[str, List[str]],
+        hdr_new_stems: Dict[str, Dict[ImageType, List[str]]],
         output_dir: Path,
         rename_log_path: Path,
         file_label: str,
     ) -> None:
-        """Rename companion files (EXR or JPG HDR) to match their HDR PNG counterparts."""
+        """Rename companion files (EXR or JPG HDR) to match their HDR PNG counterparts.
+
+        Each companion file is classified as Color or BW (by inspecting its
+        stem after stripping ``_HDR``) and then matched to the stems of the
+        same type, avoiding the BW ↔ Color swap that occurred with naive
+        positional matching.
+        """
+        from src.classifier import normalize_base as _nb, _HDR_RE
+
         for base, file_list in groups.items():
-            new_stems = hdr_new_stems.get(base, [])
-            for dup_idx, src in enumerate(
-                sorted(file_list, key=lambda p: p.name.lower())
-            ):
-                if dup_idx >= len(new_stems):
-                    break
-                dst = output_dir / f"{new_stems[dup_idx]}{src.suffix}"
-                if dst.exists():
-                    self.logger.warning(
-                        "%s target exists, skipping: %s -> %s",
-                        file_label, src.name, dst.name,
-                    )
-                    continue
-                try:
-                    src.rename(dst)
+            type_stems = hdr_new_stems.get(base, {})
+
+            # Separate companion files by Color / BW
+            typed_files: Dict[ImageType, List[Path]] = {
+                ImageType.HDR_COLOR: [],
+                ImageType.HDR_BW: [],
+            }
+            for f in sorted(file_list, key=lambda p: p.name.lower()):
+                raw_stem = _HDR_RE.sub("", f.stem)
+                _, img_type = _nb(raw_stem)
+                if img_type.is_bw:
+                    typed_files[ImageType.HDR_BW].append(f)
+                else:
+                    typed_files[ImageType.HDR_COLOR].append(f)
+
+            # Rename each type group against its matching stems
+            for img_type, files in typed_files.items():
+                new_stems = type_stems.get(img_type, [])
+                for dup_idx, src in enumerate(files):
+                    if dup_idx >= len(new_stems):
+                        break
+                    dst = output_dir / f"{new_stems[dup_idx]}{src.suffix}"
+                    if dst.exists():
+                        self.logger.warning(
+                            "%s target exists, skipping: %s -> %s",
+                            file_label, src.name, dst.name,
+                        )
+                        continue
                     try:
-                        with rename_log_path.open("a", encoding="utf-8") as f:
-                            f.write(f"{src.name} -> {dst.name}\n")
-                    except Exception:
-                        pass
-                except FileNotFoundError:
-                    self.logger.warning(
-                        "%s source missing during rename: %s",
-                        file_label, src,
-                    )
+                        src.rename(dst)
+                        try:
+                            with rename_log_path.open("a", encoding="utf-8") as f:
+                                f.write(f"{src.name} -> {dst.name}\n")
+                        except Exception:
+                            pass
+                    except FileNotFoundError:
+                        self.logger.warning(
+                            "%s source missing during rename: %s",
+                            file_label, src,
+                        )
 
     def _rename_exr_files(
         self,

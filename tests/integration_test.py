@@ -100,3 +100,55 @@ def test_full_pipeline_integration(tmp_path: Path):
     assert "photo_b_HDR.exr -> TestImage_002_HDR.exr" in log_content
     assert "photo_b_HDR.jpg -> TestImage_002_HDR.jpg" in log_content
 
+
+def test_companion_bw_color_not_swapped(tmp_path: Path):
+    """
+    Regression test: when a base has both Color and BW HDR companion files
+    (JPG/EXR), renaming must NOT swap them.  Previously, alphabetical sort
+    put _BW_HDR before _HDR, while the rename-plan stems were Color-first,
+    causing a BW ↔ Color mismatch.
+    """
+    # Mimic the user's real file set (one base, all variants)
+    (tmp_path / "photo_HDR.png").write_bytes(b"dummy")
+    (tmp_path / "photo_BW_HDR.png").write_bytes(b"dummy")
+    (tmp_path / "photo.png").write_bytes(b"dummy")
+    (tmp_path / "photo_BW.png").write_bytes(b"dummy")
+    # Companion JPG HDR files (Color + BW)
+    (tmp_path / "photo_HDR.jpg").write_bytes(b"dummy")
+    (tmp_path / "photo_BW_HDR.jpg").write_bytes(b"dummy")
+    # Companion EXR files (Color + BW)
+    (tmp_path / "photo_HDR.exr").write_bytes(b"dummy")
+    (tmp_path / "photo_BW_HDR.exr").write_bytes(b"dummy")
+
+    logger = logging.getLogger("test-bw-swap")
+    logger.addHandler(logging.NullHandler())
+
+    settings = AppSettings()
+    settings.rename_enabled = True
+    settings.prefix = "Img_"
+    settings.start_counter = 1
+    settings.zero_fill_mode = "auto"
+    settings.codec_enabled = {"jpeg": True, "jpegxl": False, "heic": False, "avif": False}
+
+    worker = ProcessingWorker(tmp_path, settings, {}, logger)
+
+    with patch("src.worker.convert_sdr", side_effect=fake_convert_sdr), \
+         patch("src.worker.convert_hdr", side_effect=fake_convert_hdr):
+        worker.process()
+
+    out = tmp_path / "output"
+
+    # --- HDR Color companion files must get the _HDR stem (NOT _BW_HDR) ---
+    assert (out / "Img_1_HDR.jpg").exists(), "Color JPG HDR should be Img_1_HDR.jpg"
+    assert (out / "Img_1_HDR.exr").exists(), "Color EXR should be Img_1_HDR.exr"
+
+    # --- HDR BW companion files must get the _BW_HDR stem (NOT _HDR) ---
+    assert (out / "Img_1_BW_HDR.jpg").exists(), "BW JPG HDR should be Img_1_BW_HDR.jpg"
+    assert (out / "Img_1_BW_HDR.exr").exists(), "BW EXR should be Img_1_BW_HDR.exr"
+
+    # Verify via rename.log
+    log_content = (out / "rename.log").read_text("utf-8")
+    assert "photo_HDR.jpg -> Img_1_HDR.jpg" in log_content
+    assert "photo_BW_HDR.jpg -> Img_1_BW_HDR.jpg" in log_content
+    assert "photo_HDR.exr -> Img_1_HDR.exr" in log_content
+    assert "photo_BW_HDR.exr -> Img_1_BW_HDR.exr" in log_content
