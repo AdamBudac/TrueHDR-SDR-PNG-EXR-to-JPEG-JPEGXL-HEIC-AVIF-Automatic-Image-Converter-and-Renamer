@@ -12,9 +12,11 @@ GUI a CLI aplikácia pre konverziu, premenovanie a zoradenie vstupných PNG/EXR/
 - Spracovanie SDR/HDR osobitne; podpora pre farebné (Color) a čiernobiele (BW) varianty
 - BW detekcia prostredníctvom prípony `_BW` alebo `-2` (nezávisle od veľkosti písmen)
 - Detekcia dostupnosti nástrojov (`ffmpeg`, `cjpeg`, `cjxl`, `heif-enc`, `avifenc`) a automatické vypnutie checkboxov chýbajúcich kodekov
+- Jeden opakovaný pokus pri zlyhaní externého príkazu (najviac dva pokusy celkom); pri opakovanom zlyhaní pokračovanie ďalším nezávislým kodekom a obrázkom
 - Tlačidlo Stop pre prerušenie spracovania kedykoľvek počas behu
 - Plnohodnotné CLI rozhranie s `argparse` pre automatizáciu / skriptovanie
-- Logy v `output/logging.log`; mapa premenovaní v `output/rename.log` (`old.ext -> new.ext`)
+- Finálne modálne okno **Processing summary** s počtami spracovaných, úspešných, čiastočne úspešných, chybných a preskočených obrázkov aj opakovaných príkazov
+- Kompletný log v `output/logging.log`; mapa premenovaní v `output/rename.log` (`old.ext -> new.ext`); definitívne chyby v `output/errors.log`
 - HDR JPEG/JPG súbory (s príponou `_HDR`) sú skopírované a premenované spolu s ich HDR PNG náprotivkami (nie sú konvertované, pretože ich nie je možné vhodne prekódovať)
 - Uloženie nastavení do `%APPDATA%`
 
@@ -25,8 +27,10 @@ src/
 ├── main.py          – Vstupný bod (GUI alebo CLI cez --cli vlajku)
 ├── cli.py           – argparse CLI rozhranie
 ├── gui.py           – PySide6 GUI (Hlavné okno)
+├── summary_dialog.py – Modálne okno s finálnym súhrnom spracovania
 ├── styles.qss       – Qt štýly
 ├── models.py        – AppSettings dataclass, ImageType enum, konštanty
+├── results.py       – Výsledkové modely príkazov, obrázkov a celého spracovania
 ├── config.py        – Načítanie/uloženie nastavení, cesty, detekcia nástrojov
 ├── classifier.py    – Klasifikácia obrázkov (SDR/HDR, Color/BW)
 ├── renamer.py       – Zostavenie a vykonanie plánu premenovania
@@ -89,8 +93,23 @@ Pracovný postup v GUI:
 - **Načítať obrázky**: vyberte priečinok s obrázkami
 - **Nastaviť premenovanie**: prefix, číslovanie, zerofill auto/manuálne
 - **Vybrať kodeky**: kodeky JPEG/JPEG XL/HEIC/AVIF a kvalita pre každý kodek
-- **Spracovanie**: spustí konverziu, zobrazuje priebeh a stav
+- **Spracovanie**: spustí konverziu a zobrazuje priebeh a stav; po dokončení samostatné modálne okno **Processing summary** zobrazí finálne počty a výsledok
 - **Stop**: zruší spracovanie počas behu
+
+#### Výsledky v okne Processing summary
+
+Hlavné okno zostáva nezmenené a otvorené. Po skončení behu sa nad ním zobrazí
+samostatné modálne okno **Processing summary** s počtami obrázkov, výstupov,
+príkazov, opakovaných pokusov, chýb a preskočení pre závislosť. Pri zrušenom
+behu zobrazí aj stav zrušenia a počet nespracovaných obrázkov.
+
+| Výsledok | Význam |
+| -------- | ------ |
+| **Processing completed** | Všetky požadované výstupy vznikli na prvý pokus |
+| **Processing completed after retries** | Aspoň jeden príkaz prvýkrát zlyhal, ale uspel na druhý pokus |
+| **Processing completed with errors** | Spracovanie dobehlo do konca, ale aspoň jeden požadovaný výstup definitívne zlyhal alebo sa musel preskočiť |
+| **Processing cancelled** | Používateľ stlačil **Stop**; okno ukáže dokončenú prácu aj počet nespracovaných obrázkov |
+| **Processing failed** | Spracovanie zastavila fatálna chyba pipeline; podrobnosti sú v `logging.log` |
 
 ### Režim CLI
 
@@ -100,6 +119,15 @@ python src/main.py --cli --input ./photos --prefix "Vacation_" --quality-jpeg 90
 python src/main.py --cli --input ./photos --settings settings.json --overwrite
 python src/main.py --cli --help
 ```
+
+Návratové kódy CLI:
+
+| Kód | Význam |
+| --- | ------ |
+| `0` | Spracovanie skončilo úspešne, vrátane príkazov zachránených opakovaným pokusom |
+| `1` | Vstupný priečinok neexistuje alebo je výstupný priečinok neprázdny a nebol použitý parameter `--overwrite` |
+| `2` | Neplatné argumenty CLI alebo fatálna chyba, ktorá zastavila pipeline |
+| `3` | Spracovanie sa dokončilo, ale aspoň jedna operácia pre obrázok alebo kodek definitívne zlyhala |
 
 ## Klasifikácia obrázkov
 
@@ -122,22 +150,44 @@ EXR a JPG/JPEG HDR súbory nie sú konvertované — sú iba skopírované a pre
 
 - Pri štarte hľadá aplikácia nastavenia najprv v `data/settings.json` (portable režim). Ak ich nenájde, načíta z `%APPDATA%/TrueHDRConverter/settings.json` (s fallbackom na predvolené nastavenia).
 - Po výbere pracovného priečinka vytvorí zložku `output/`, skopíruje všetky `.png`, `.exr` a HDR `.jpg`/`.jpeg` súbory z koreňa tohto priečinka do `output/` a pracuje výlučne tam.
-- Pri premenovávaní zapisuje riadok po riadku do `output/rename.log` vo formáte `old.ext -> new.ext`; chybové a informačné logy sa ukladajú do `output/logging.log`.
+- Každý zlyhaný externý príkaz sa raz zopakuje s rovnakými argumentmi, teda prebehne najviac dvakrát. Ak zlyhá aj druhý pokus, chybný výstup sa preskočí a spracovanie pokračuje ďalším nezávislým kodekom a obrázkom.
+- Retry sa vzťahuje na konkrétny príkaz, nie na celý obrázok: už hotové výstupy sa nekódujú znova. Pred druhým pokusom sa odstráni čiastočný dočasný výstup a dočasné názvy sú unikátne pre dané spracovanie obrázka.
+- SDR JPEG má jednu explicitnú závislosť: `ffmpeg` najprv vytvorí dočasný BMP a `cjpeg` z neho následne vytvorí JPEG. Ak vytvorenie BMP zlyhá pri oboch pokusoch, `cjpeg` sa pre daný obrázok preskočí, no ostatné vybrané kodeky a nasledujúce obrázky pokračujú normálne.
+- Zrušenie používateľom sa nikdy neopakuje ani nezaznamenáva ako chyba konverzie.
+- Po skončení spracovania v GUI zobrazí samostatné modálne okno **Processing summary** počty obrázkov, výstupov, príkazov, opakovaných pokusov, chýb a preskočení pre závislosť. Pri zrušenom behu zobrazí aj stav zrušenia a počet nespracovaných obrázkov.
 - Ak zložka `output/` nie je prázdna, zobrazí sa dialóg pre prepísanie súborov (overwrite).
 - Stlačenie tlačidla **Stop** okamžite ukončí všetky bežiace konverzné procesy (agresívne zrušenie).
 
+## Log súbory
+
+Pri každom behu sa v `output/` nanovo vytvoria všetky tri logy:
+
+| Súbor | Obsah |
+| ----- | ----- |
+| `logging.log` | Kompletný chronologický priebeh vrátane každého spustenia príkazu, retry, varovaní a finálneho súhrnu |
+| `rename.log` | Úspešné premenovania vo formáte `old.ext -> new.ext` |
+| `errors.log` | Iba definitívne chyby príkazov alebo operácií obrázka; po čistom alebo retry úspešnom behu zostane prázdny |
+
+Každá definitívna chyba príkazu sa uloží ako jeden podrobný blok obsahujúci
+obrázok, kodek, fázu, kopírovateľný príkaz, oba pokusy, návratový kód,
+zachytený `stdout`/`stderr`, finálny Python traceback a prípadný závislý krok,
+ktorý sa preskočil. Chyba prvého pokusu, ktorú retry opraví, zostane iba v
+`logging.log` a nezapíše sa do `errors.log`.
+
 ## Testy
 
-Projekt obsahuje dva druhy testov, oba napísané pre `pytest`:
+Automatický testovací balík obsahuje:
 
-1. **Unit testy** (`tests/unit_tests.py`)
-   - Testujú izolované komponenty, napr. logiku `classifier.py`, orezávanie hodnôt v `config.py` a výpočty pre zero-fill.
-   - Spustenie: `python -m pytest tests/unit_tests.py -v`
+- `tests/unit_tests.py` – klasifikácia, validácia nastavení, vyhľadávanie súborov a pomocné výpočty zero-fill
+- `tests/integration_test.py` – kompletný tok kopírovania, klasifikácie, premenovania a workeru s mockovanými konverziami
+- `tests/test_retry_processing.py` – retry, čistenie čiastočných výstupov, závislé preskočenie, zrušenie, `errors.log`, progress a výsledkové počítadlá
+- `tests/test_summary_dialog.py` – všetky výsledné stavy a otvorenie samostatného modálneho okna
 
-2. **Integračný test** (`tests/integration_test.py`)
-   - Testuje kompletnú pipelinu od začiatku do konca prostredníctvom `ProcessingWorker`.
-   - Využíva `unittest.mock` na simuláciu `ffmpeg` a ďalších externých nástrojov, vďaka čomu zbehne okamžite a nevyžaduje inštaláciu skutočných nástrojov v systéme ani reálne obrázky.
-   - Spustenie: `python -m pytest tests/integration_test.py -v`
+Spustenie celého balíka:
+
+```bash
+python -m pytest tests/unit_tests.py tests/integration_test.py tests/test_retry_processing.py tests/test_summary_dialog.py -v
+```
 
 _Poznámka: Pre úspešné prebehnutie testov nepotrebujete mať vo vašom PATH prostredí nainštalované žiadne externé nástroje (ako ffmpeg)._
 

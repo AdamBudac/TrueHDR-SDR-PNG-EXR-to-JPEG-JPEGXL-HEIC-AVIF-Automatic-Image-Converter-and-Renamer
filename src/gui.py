@@ -32,7 +32,10 @@ from PySide6.QtWidgets import (
 )
 
 from src.models import AppSettings
+from src.results import ProcessingSummary
+from src.summary_dialog import ProcessingSummaryDialog, build_summary_view_model
 from src.config import (
+    close_file_loggers,
     config_file,
     detect_tools,
     is_frozen,
@@ -440,6 +443,7 @@ class MainWindow(QMainWindow):
         if output_dir.exists() and any(output_dir.iterdir()):
             if not self._confirm_overwrite_output():
                 return
+            close_file_loggers(self.logger)
             shutil.rmtree(output_dir, ignore_errors=True)
 
         self._set_settings_buttons_enabled(False)
@@ -454,7 +458,7 @@ class MainWindow(QMainWindow):
         )
         self.worker.progress.connect(self._on_progress)
         self.worker.status.connect(self._set_status)
-        self.worker.finished.connect(self._on_finished)
+        self.worker.completed.connect(self._on_processing_completed)
         self.btn_process.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.worker.start()
@@ -474,13 +478,16 @@ class MainWindow(QMainWindow):
         percent = int((current / total) * 100)
         self.progress_bar.setValue(percent)
 
-    def _on_finished(self, success: bool) -> None:
+    def _on_processing_completed(self, summary: ProcessingSummary) -> None:
+        """Restore the main window and show the modal processing summary."""
         self.btn_process.setEnabled(True)
         self.btn_stop.setEnabled(False)
-        if success:
-            self._set_status("Processing completed", "success")
         self._stop_processing_animation()
         self._set_settings_buttons_enabled(True)
+
+        view_model = build_summary_view_model(summary)
+        self._set_status(view_model.status_message, view_model.status_level)
+        ProcessingSummaryDialog(summary, self).exec()
 
     # -- processing animation ------------------------------------------------
 

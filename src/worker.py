@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import logging
 import shutil
+import traceback
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QThread, Signal
 
@@ -22,7 +23,13 @@ from src.models import AppSettings, ImageType
 from src.config import attach_file_logger
 from src.classifier import classify_files
 from src.renamer import build_rename_plan, execute_rename_plan, RenamePlan
-from src.converter import convert_sdr, convert_hdr, ProcessRunner
+from src.converter import (
+    convert_sdr,
+    convert_hdr,
+    log_operation_failure,
+    ProcessRunner,
+)
+from src.results import ImageConversionResult, ProcessingSummary
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +91,7 @@ class ProcessingWorker(QThread):
 
     progress = Signal(int, int)   # (current, total)
     status = Signal(str, str)     # (message, level)
-    finished = Signal(bool)       # success?
+    completed = Signal(object)    # ProcessingSummary
 
     def __init__(
         self,
@@ -100,6 +107,7 @@ class ProcessingWorker(QThread):
         self.logger = logger
         self._cancelled = False
         self.runner = ProcessRunner()
+        self.summary: Optional[ProcessingSummary] = None
 
     # -- public API ----------------------------------------------------------
 
@@ -112,16 +120,20 @@ class ProcessingWorker(QThread):
 
     def run(self) -> None:
         try:
-            self.process()
-            self.finished.emit(True)
+            summary = self.process()
         except (CancelledException, InterruptedError):
             self.logger.info("Processing cancelled by user")
             self.status.emit("Processing cancelled", "warning")
-            self.finished.emit(False)
+            summary = self.summary or self._new_summary()
+            summary.cancelled = True
         except Exception as exc:
             self.logger.exception("Processing failed: %s", exc)
             self.status.emit("Error – check logging.log", "error")
-            self.finished.emit(False)
+            summary = self.summary or self._new_summary()
+            summary.fatal_error = f"{type(exc).__name__}: {exc}"
+            summary.fatal_traceback = traceback.format_exc()
+        self.summary = summary
+        self.completed.emit(summary)
 
     # -- pipeline ------------------------------------------------------------
 
@@ -132,15 +144,27 @@ class ProcessingWorker(QThread):
     def emit_status(self, message: str, level: str = "info") -> None:
         self.status.emit(message, level)
 
-    def process(self) -> None:  # noqa: C901 – sequential pipeline, intentionally long
+    def _new_summary(self) -> ProcessingSummary:
+        base_dir = self.input_dir if self.input_dir else Path.cwd()
+        output_dir = base_dir / "output"
+        return ProcessingSummary(
+            output_dir=output_dir,
+            logging_log_path=output_dir / "logging.log",
+            rename_log_path=output_dir / "rename.log",
+            errors_log_path=output_dir / "errors.log",
+        )
+
+    def process(self) -> ProcessingSummary:  # noqa: C901 – sequential pipeline
+        summary = self._new_summary()
+        self.summary = summary
         if not self.input_dir or not self.input_dir.exists():
             raise FileNotFoundError("Input directory not selected")
 
-        output_dir = self.input_dir / "output"
+        output_dir = summary.output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
-        log_path = output_dir / "logging.log"
-        rename_log_path = output_dir / "rename.log"
-        attach_file_logger(self.logger, log_path)
+        log_path = summary.logging_log_path
+        rename_log_path = summary.rename_log_path
+        attach_file_logger(self.logger, log_path, summary.errors_log_path)
         rename_log_path.write_text("", encoding="utf-8")
 
         self._check_cancelled()
@@ -152,9 +176,10 @@ class ProcessingWorker(QThread):
         png_files = sorted(png_files, key=lambda p: p.name.lower())
         exr_files = sorted(exr_files, key=lambda p: p.name.lower())
         jpg_hdr_files = sorted(jpg_hdr_files, key=lambda p: p.name.lower())
+        summary.discovered_images = len(png_files)
         if not png_files:
             self.emit_status("No PNG files found", "warning")
-            return
+            return summary
 
         self._check_cancelled()
 
@@ -199,14 +224,56 @@ class ProcessingWorker(QThread):
                         else file_path
                     )
 
-                    # Decide whether to convert based on settings
-                    if img_type.is_hdr and self.settings.hdr_enabled:
-                        convert_hdr(actual_path, self.settings, self.tool_map, self.runner, self.logger)
-                    elif not img_type.is_hdr and self.settings.sdr_enabled:
-                        convert_sdr(actual_path, self.settings, self.tool_map, self.runner, self.logger)
+                    # Decide whether to convert based on settings. Expected
+                    # command failures are represented in the returned result;
+                    # this boundary also prevents an unexpected image-specific
+                    # failure from terminating the remaining batch.
+                    try:
+                        if img_type.is_hdr and self.settings.hdr_enabled:
+                            image_result = convert_hdr(
+                                actual_path,
+                                self.settings,
+                                self.tool_map,
+                                self.runner,
+                                self.logger,
+                            )
+                        elif not img_type.is_hdr and self.settings.sdr_enabled:
+                            image_result = convert_sdr(
+                                actual_path,
+                                self.settings,
+                                self.tool_map,
+                                self.runner,
+                                self.logger,
+                            )
+                        else:
+                            scope = "HDR" if img_type.is_hdr else "SDR"
+                            image_result = ImageConversionResult.skipped(
+                                actual_path,
+                                f"{scope} processing is disabled",
+                            )
+                    except (CancelledException, InterruptedError):
+                        raise
+                    except Exception as exc:
+                        error_trace = traceback.format_exc()
+                        log_operation_failure(
+                            self.logger,
+                            actual_path,
+                            "convert_image",
+                            exc,
+                            "Unexpected error escaped the codec-level handlers",
+                        )
+                        image_result = ImageConversionResult.failed_unexpected(
+                            actual_path,
+                            error_trace,
+                        )
 
+                    summary.add_image_result(image_result)
                     processed += 1
                     self.progress.emit(processed, total)
+                    self._check_cancelled()
+
+        self._check_cancelled()
+        return summary
 
     def _build_hdr_stem_map(
         self, executed: List[RenamePlan]

@@ -4,25 +4,46 @@ from unittest.mock import patch
 
 from src.models import AppSettings
 from src.config import detect_tools
+from src.results import ImageConversionResult, OutputResult, OutputStatus
 from src.worker import ProcessingWorker
 
 
 def fake_convert_sdr(png_file: Path, settings: AppSettings, tool_map: dict, runner, logger: logging.Logger):
     """Mock implementation that just creates dummy output files."""
+    result = ImageConversionResult(source_path=png_file)
     stem = png_file.with_suffix("")
     codecs = {"jpeg": ".jpg", "jpegxl": ".jxl", "heic": ".heic", "avif": ".avif"}
     for codec, ext in codecs.items():
         if settings.codec_enabled.get(codec):
-            stem.with_suffix(ext).touch()
+            output_path = stem.with_suffix(ext)
+            output_path.touch()
+            result.outputs.append(
+                OutputResult(
+                    codec=codec,
+                    status=OutputStatus.SUCCESS,
+                    output_path=output_path,
+                )
+            )
+    return result
 
 
 def fake_convert_hdr(png_file: Path, settings: AppSettings, tool_map: dict, runner, logger: logging.Logger):
     """Mock implementation for HDR that creates dummy output files."""
+    result = ImageConversionResult(source_path=png_file)
     stem = png_file.with_suffix("")
     codecs = {"jpegxl": ".jxl", "heic": ".heic", "avif": ".avif"}
     for codec, ext in codecs.items():
         if settings.codec_enabled.get(codec):
-            stem.with_suffix(ext).touch()
+            output_path = stem.with_suffix(ext)
+            output_path.touch()
+            result.outputs.append(
+                OutputResult(
+                    codec=codec,
+                    status=OutputStatus.SUCCESS,
+                    output_path=output_path,
+                )
+            )
+    return result
 
 
 def test_full_pipeline_integration(tmp_path: Path):

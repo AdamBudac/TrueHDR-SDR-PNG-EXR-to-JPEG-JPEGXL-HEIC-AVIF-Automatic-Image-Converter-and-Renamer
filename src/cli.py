@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from src.models import AppSettings, ALL_CODECS
+from src.results import ProcessingOutcome, ProcessingSummary
 from src.config import (
     config_file,
     detect_tools,
@@ -16,6 +17,26 @@ from src.config import (
     save_settings_to_file,
 )
 from src.worker import ProcessingWorker
+
+
+def _log_processing_summary(
+    logger: logging.Logger, summary: ProcessingSummary
+) -> None:
+    """Write the final run counters to the CLI log."""
+    logger.info(
+        "Processing summary: found=%s, successful=%s, partial=%s, "
+        "failed=%s, skipped=%s, retried_commands=%s, recovered_commands=%s, "
+        "failed_commands=%s, dependency_skips=%s",
+        summary.discovered_images,
+        summary.successful_images,
+        summary.partially_successful_images,
+        summary.failed_images,
+        summary.skipped_images,
+        summary.retried_commands,
+        summary.recovered_commands,
+        summary.failed_commands,
+        summary.dependency_skipped_commands,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +189,18 @@ def run_cli(argv: list[str] | None = None) -> int:
     logger.info("Starting conversion for: %s", input_dir)
     worker = ProcessingWorker(input_dir, settings, tool_map, logger)
     try:
-        worker.process()
-        logger.info("Conversion completed successfully.")
+        summary = worker.process()
+        _log_processing_summary(logger, summary)
+        if summary.outcome == ProcessingOutcome.PARTIAL:
+            logger.warning(
+                "Conversion completed with errors. See %s",
+                summary.errors_log_path,
+            )
+            return 3
+        if summary.outcome == ProcessingOutcome.RECOVERED:
+            logger.info("Conversion completed successfully after retries.")
+        else:
+            logger.info("Conversion completed successfully.")
         return 0
     except Exception as exc:
         logger.exception("Conversion failed: %s", exc)

@@ -153,12 +153,44 @@ def required_tools_missing_for_codec(
 # Logging helpers
 # ---------------------------------------------------------------------------
 
-def attach_file_logger(logger: logging.Logger, log_path: Path) -> None:
-    """Replace any existing :class:`FileHandler` on *logger* with one writing to *log_path*."""
+class _ErrorLogFilter(logging.Filter):
+    """Allow only records explicitly marked for the dedicated error log."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return bool(getattr(record, "error_log", False))
+
+
+def close_file_loggers(logger: logging.Logger) -> None:
+    """Detach and close every file handler owned by *logger*."""
     for handler in list(logger.handlers):
         if isinstance(handler, logging.FileHandler):
             logger.removeHandler(handler)
-    file_handler = logging.FileHandler(log_path, mode="w", encoding="utf-8")
+            handler.close()
+
+
+def attach_file_logger(
+    logger: logging.Logger,
+    log_path: Path,
+    errors_log_path: Optional[Path] = None,
+) -> None:
+    """Replace file handlers with fresh main and optional error log handlers.
+
+    Records sent with ``extra={"error_log": True}`` are written to both the
+    main log and the dedicated error log.  All other records are written only
+    to the main log.
+    """
+    close_file_loggers(logger)
+
     formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+
+    file_handler = logging.FileHandler(log_path, mode="w", encoding="utf-8")
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
+
+    if errors_log_path is not None:
+        errors_handler = logging.FileHandler(
+            errors_log_path, mode="w", encoding="utf-8"
+        )
+        errors_handler.setFormatter(formatter)
+        errors_handler.addFilter(_ErrorLogFilter())
+        logger.addHandler(errors_handler)

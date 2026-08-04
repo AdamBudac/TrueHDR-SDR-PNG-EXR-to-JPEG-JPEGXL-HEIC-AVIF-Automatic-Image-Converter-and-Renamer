@@ -12,9 +12,11 @@ GUI and CLI application for converting, renaming, and sorting input PNG/EXR/JPG 
 - Separate SDR/HDR processing; supports Color and Black & White (BW) variants
 - BW detection via `_BW` suffix or `-2` suffix (case-insensitive)
 - Detects availability of tools (`ffmpeg`, `cjpeg`, `cjxl`, `heif-enc`, `avifenc`) and auto-disables missing codec checkboxes
+- Retries a failed external command once (two attempts total), then continues with the next independent codec and image if the command still fails
 - Stop button to cancel processing mid-run
 - Full CLI interface with argparse for automation / scripting
-- Logs to `output/logging.log`; rename map in `output/rename.log` (`old.ext -> new.ext`)
+- Final modal **Processing summary** dialog with processed, successful, partial, failed, skipped, and retry counters
+- Full activity log in `output/logging.log`; rename map in `output/rename.log` (`old.ext -> new.ext`); definitive failures in `output/errors.log`
 - HDR JPEG/JPG files (with `_HDR` suffix) are copied and renamed alongside their HDR PNG counterparts (not converted, as they cannot be suitably re-encoded)
 - Saves settings to `%APPDATA%`
 
@@ -25,8 +27,10 @@ src/
 ├── main.py          – Entry point (GUI or CLI via --cli flag)
 ├── cli.py           – argparse CLI interface
 ├── gui.py           – PySide6 GUI (MainWindow)
+├── summary_dialog.py – Modal final processing summary
 ├── styles.qss       – Qt stylesheet
 ├── models.py        – AppSettings dataclass, ImageType enum, constants
+├── results.py       – Per-command, per-image, and final result models
 ├── config.py        – Load/save settings, config paths, tool detection
 ├── classifier.py    – Image classification (SDR/HDR, Color/BW)
 ├── renamer.py       – Rename plan builder and executor
@@ -89,8 +93,23 @@ GUI workflow:
 - **Load images**: pick the directory with images
 - **Configure renaming**: name, counter, zerofill auto/manual
 - **Select codecs**: JPEG/JPEG XL/HEIC/AVIF codecs and quality per codec
-- **Processing**: run conversion, shows progress and status
+- **Processing**: run conversion, shows progress and status; after completion, a separate modal **Processing summary** window shows the final counters and outcome
 - **Stop**: cancel processing mid-run
+
+#### Processing summary outcomes
+
+The main window remains unchanged and open.  When a run ends, a separate modal
+**Processing summary** window appears above it with image, output, command,
+retry, failure, and dependency-skip counters. For a cancelled run it also shows
+the cancellation state and the number of images not processed.
+
+| Outcome | Meaning |
+| ------- | ------- |
+| **Processing completed** | Every requested output was created on its first attempt |
+| **Processing completed after retries** | At least one command failed initially but succeeded on its second attempt |
+| **Processing completed with errors** | The run reached the end, but one or more requested outputs failed definitively or had to be skipped |
+| **Processing cancelled** | The user pressed **Stop**; completed work and the number of images not processed are shown |
+| **Processing failed** | A fatal pipeline-level error stopped the run; see `logging.log` |
 
 ### CLI mode
 
@@ -100,6 +119,15 @@ python src/main.py --cli --input ./photos --prefix "Vacation_" --quality-jpeg 90
 python src/main.py --cli --input ./photos --settings settings.json --overwrite
 python src/main.py --cli --help
 ```
+
+CLI exit codes:
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | Processing completed successfully, including commands recovered by retry |
+| `1` | The input directory does not exist, or the output directory is not empty and `--overwrite` was not supplied |
+| `2` | Invalid CLI arguments, or a fatal pipeline error stopped processing |
+| `3` | Processing completed, but one or more per-image or per-codec operations failed definitively |
 
 ## Image Classification
 
@@ -122,22 +150,44 @@ EXR and JPG/JPEG HDR files are not converted — they are only copied and rename
 
 - On start, the app looks for settings in `data/settings.json` (portable mode). If not found, it loads from `%APPDATA%/TrueHDRConverter/settings.json` (falls back to defaults).
 - After selecting a working directory, it creates `output/`, copies all `.png`, `.exr`, and HDR `.jpg`/`.jpeg` files from the root of that directory into `output/`, and works only there
-- When renaming, it writes `output/rename.log` line by line as `old.ext -> new.ext`; error/info logs go to `output/logging.log`
+- Every failed external command is retried once with the same arguments, for a maximum of two attempts. If the second attempt also fails, the failed output is skipped and processing continues with the next independent codec and image.
+- Retry is command-scoped, not image-scoped: outputs already completed for the image are not encoded again. A partial temporary output is removed before retry, and temporary filenames are unique per image run.
+- SDR JPEG output has one explicit dependency: `ffmpeg` first creates an intermediate BMP and `cjpeg` then creates the JPEG. If BMP creation fails on both attempts, `cjpeg` is skipped for that image, while its other selected codecs and subsequent images continue normally.
+- User cancellation is never retried or recorded as a conversion failure.
+- After a GUI run finishes, a separate modal **Processing summary** window reports image, output, command, retry, failure, and dependency-skip totals. A cancelled run additionally shows its cancellation state and the number of images not processed.
 - An overwrite dialog appears if `output/` is not empty
 - Pressing **Stop** immediately terminates any running conversion processes (aggressive cancellation)
 
+## Log Files
+
+All three logs are created fresh in `output/` for every run:
+
+| File | Contents |
+| ---- | -------- |
+| `logging.log` | Full chronological activity log, including every command attempt, retry, warning, and final summary |
+| `rename.log` | Successful renames in the form `old.ext -> new.ext` |
+| `errors.log` | Only definitive command or image-operation failures; it remains empty after a clean or fully recovered run |
+
+Each definitive command failure is stored as one detailed block containing the
+image, codec, stage, copy/paste-friendly command, both attempts, return code,
+captured `stdout`/`stderr`, final Python traceback, and any dependent step that
+was skipped.  A first-attempt error that succeeds on retry remains only in
+`logging.log` and does not pollute `errors.log`.
+
 ## Tests
 
-The project includes two types of tests, both written for `pytest`:
+The automated test suite contains:
 
-1. **Unit tests** (`tests/unit_tests.py`)
-   - Tests isolated components like `classifier.py` logic, `config.py` clamping, and zero-fill math.
-   - Run: `python -m pytest tests/unit_tests.py -v`
+- `tests/unit_tests.py` – classification, settings validation, file discovery, and zero-fill helpers
+- `tests/integration_test.py` – end-to-end copy, classification, rename, and worker flow with mocked converters
+- `tests/test_retry_processing.py` – retry, partial-output cleanup, dependency skip, cancellation, `errors.log`, progress, and result counters
+- `tests/test_summary_dialog.py` – all summary outcomes and opening the separate modal result window
 
-2. **Integration test** (`tests/integration_test.py`)
-   - Tests the full pipeline end-to-end via `ProcessingWorker`.
-   - Uses `unittest.mock` to simulate `ffmpeg` and other tools, so it runs instantly without requiring the actual binaries or real images.
-   - Run: `python -m pytest tests/integration_test.py -v`
+Run the complete suite:
+
+```bash
+python -m pytest tests/unit_tests.py tests/integration_test.py tests/test_retry_processing.py tests/test_summary_dialog.py -v
+```
 
 _Note: You do not need any external tools in your PATH to run the tests successfully._
 
