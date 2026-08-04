@@ -11,7 +11,7 @@ GUI a CLI aplikácia pre konverziu, premenovanie a zoradenie vstupných PNG/EXR/
 - Premenovanie s prefixom, číslovaním, auto/manuálnym zerofillom; HDR dostáva `_HDR` suffix, BW (čiernobiele) dostáva `_BW` suffix, kópie dostávajú `_DuplicateXX`
 - Spracovanie SDR/HDR osobitne; podpora pre farebné (Color) a čiernobiele (BW) varianty
 - BW detekcia prostredníctvom prípony `_BW` alebo `-2` (nezávisle od veľkosti písmen)
-- Detekcia dostupnosti nástrojov (`ffmpeg`, `cjpeg`, `cjxl`, `heif-enc`, `avifenc`) a automatické vypnutie checkboxov chýbajúcich kodekov
+- Detekcia dostupnosti nástrojov (`cjpeg`, `cjxl`, `heif-enc`, `avifenc`) a automatické vypnutie checkboxov chýbajúcich kodekov
 - Jeden opakovaný pokus pri zlyhaní externého príkazu (najviac dva pokusy celkom); pri opakovanom zlyhaní pokračovanie ďalším nezávislým kodekom a obrázkom
 - Tlačidlo Stop pre prerušenie spracovania kedykoľvek počas behu
 - Plnohodnotné CLI rozhranie s `argparse` pre automatizáciu / skriptovanie
@@ -46,8 +46,7 @@ src/
   - `pytest==9.0.2`
   - `pyinstaller==6.19.0` (len pre build EXE)
 - **Externé nástroje v PATH:**
-  - `ffmpeg` – konverzia obrázkov
-  - `cjpeg` – nástroj z balíka `libjpeg-turbo` na export JPEG
+  - `cjpeg` – nástroj z balíka `libjpeg-turbo` na priamy export SDR PNG do JPEG
   - `cjxl` – súčasť `libjxl` na export JPEG XL
   - `heif-enc` – nástroj z `libheif` na export HEIC
   - `avifenc` – nástroj z `libavif` na export AVIF
@@ -152,7 +151,7 @@ EXR a JPG/JPEG HDR súbory nie sú konvertované — sú iba skopírované a pre
 - Po výbere pracovného priečinka vytvorí zložku `output/`, skopíruje všetky `.png`, `.exr` a HDR `.jpg`/`.jpeg` súbory z koreňa tohto priečinka do `output/` a pracuje výlučne tam.
 - Každý zlyhaný externý príkaz sa raz zopakuje s rovnakými argumentmi, teda prebehne najviac dvakrát. Ak zlyhá aj druhý pokus, chybný výstup sa preskočí a spracovanie pokračuje ďalším nezávislým kodekom a obrázkom.
 - Retry sa vzťahuje na konkrétny príkaz, nie na celý obrázok: už hotové výstupy sa nekódujú znova. Pred druhým pokusom sa odstráni čiastočný dočasný výstup a dočasné názvy sú unikátne pre dané spracovanie obrázka.
-- SDR JPEG má jednu explicitnú závislosť: `ffmpeg` najprv vytvorí dočasný BMP a `cjpeg` z neho následne vytvorí JPEG. Ak vytvorenie BMP zlyhá pri oboch pokusoch, `cjpeg` sa pre daný obrázok preskočí, no ostatné vybrané kodeky a nasledujúce obrázky pokračujú normálne.
+- SDR 8-bitové PNG súbory kóduje priamo do JPEG nástroj `cjpeg` z balíka `libjpeg-turbo`, bez medziformátu alebo ďalšieho konverzného nástroja.
 - Zrušenie používateľom sa nikdy neopakuje ani nezaznamenáva ako chyba konverzie.
 - Po skončení spracovania v GUI zobrazí samostatné modálne okno **Processing summary** počty obrázkov, výstupov, príkazov, opakovaných pokusov, chýb a preskočení pre závislosť. Pri zrušenom behu zobrazí aj stav zrušenia a počet nespracovaných obrázkov.
 - Ak zložka `output/` nie je prázdna, zobrazí sa dialóg pre prepísanie súborov (overwrite).
@@ -189,15 +188,14 @@ Spustenie celého balíka:
 python -m pytest tests/unit_tests.py tests/integration_test.py tests/test_retry_processing.py tests/test_summary_dialog.py -v
 ```
 
-_Poznámka: Pre úspešné prebehnutie testov nepotrebujete mať vo vašom PATH prostredí nainštalované žiadne externé nástroje (ako ffmpeg)._
+_Poznámka: Pre úspešné prebehnutie testov nepotrebujete mať vo vašom PATH prostredí nainštalované žiadne externé nástroje._
 
 ## Referencie
 
-- [ffmpeg](https://www.ffmpeg.org/) v8.0.1-full
-- [libjpeg-turbo](https://github.com/libjpeg-turbo/libjpeg-turbo) v3.1.3-vc-x64
-- [libjxl](https://github.com/libjxl/libjxl) v0.11.1 x64
-- [libheif](https://github.com/strukturag/libheif) v1.19.5 x64
-- [libavif](https://github.com/AOMediaCodec/libavif) v1.3.0 x64
+- [libjpeg-turbo](https://github.com/libjpeg-turbo/libjpeg-turbo) v3.2.0
+- [libjxl](https://github.com/libjxl/libjxl) v0.12.0
+- [libheif](https://github.com/strukturag/libheif) v1.20.2
+- [libavif](https://github.com/AOMediaCodec/libavif) v1.4.2
 
 _Poznámka: Aplikácia by mala bez problémov fungovať aj s novšími verziami týchto knižníc._
 

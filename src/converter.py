@@ -461,12 +461,11 @@ def convert_sdr(
     result = ImageConversionResult(source_path=png_file)
     stem = png_file.with_suffix("")
     temp_base = png_file.with_name(f"Tempfile_{uuid4().hex}")
-    temp_bmp = temp_base.with_suffix(".bmp")
     temp_jpg = temp_base.with_suffix(".jpg")
     temp_jxl = temp_base.with_suffix(".jxl")
     temp_heic = temp_base.with_suffix(".heic")
     temp_avif = temp_base.with_suffix(".avif")
-    temp_files = [temp_bmp, temp_jpg, temp_jxl, temp_heic, temp_avif]
+    temp_files = [temp_jpg, temp_jxl, temp_heic, temp_avif]
     _cleanup_temp_files(temp_files, logger)
 
     try:
@@ -477,113 +476,28 @@ def convert_sdr(
                     _unavailable_output("jpeg", png_file, missing, logger)
                 )
             else:
-                ffmpeg_command = [
-                    "ffmpeg",
-                    "-y",
-                    "-i",
-                    str(png_file),
-                    "-pix_fmt",
-                    "rgb24",
-                    str(temp_bmp),
-                ]
-                bmp_result = _run_command_with_retry(
-                    command=ffmpeg_command,
-                    expected_output=temp_bmp,
-                    image_path=png_file,
-                    codec="jpeg",
-                    stage="png_to_bmp",
-                    runner=runner,
-                    logger=logger,
-                    dependent_step="bmp_to_jpeg (cjpeg)",
-                )
-                jpeg_steps = [bmp_result]
-                if bmp_result.status == StepStatus.FAILED:
-                    cjpeg_command = [
-                        "cjpeg",
-                        "-quality",
-                        str(settings.codec_quality["jpeg"]),
-                        "-optimize",
-                        "-precision",
-                        "8",
-                        "-outfile",
-                        str(temp_jpg),
-                        str(temp_bmp),
-                    ]
-                    jpeg_steps.append(
-                        StepResult(
-                            name="bmp_to_jpeg",
-                            status=StepStatus.SKIPPED_DEPENDENCY,
-                            command=tuple(cjpeg_command),
-                            reason="png_to_bmp failed after two attempts",
-                        )
-                    )
-                    logger.warning(
-                        "Skipping cjpeg for %s because the BMP prerequisite failed",
-                        png_file.name,
-                    )
-                    result.outputs.append(
-                        OutputResult(
-                            codec="jpeg",
-                            status=OutputStatus.FAILED,
-                            output_path=stem.with_suffix(".jpg"),
-                            steps=jpeg_steps,
-                            reason=bmp_result.reason,
-                        )
-                    )
-                else:
-                    cjpeg_command = [
-                        "cjpeg",
-                        "-quality",
-                        str(settings.codec_quality["jpeg"]),
-                        "-optimize",
-                        "-precision",
-                        "8",
-                        "-outfile",
-                        str(temp_jpg),
-                        str(temp_bmp),
-                    ]
-                    jpeg_result = _run_command_with_retry(
-                        command=cjpeg_command,
-                        expected_output=temp_jpg,
-                        image_path=png_file,
+                result.outputs.append(
+                    _direct_output(
                         codec="jpeg",
-                        stage="bmp_to_jpeg",
+                        stage="png_to_jpeg",
+                        command=[
+                            "cjpeg",
+                            "-quality",
+                            str(settings.codec_quality["jpeg"]),
+                            "-optimize",
+                            "-precision",
+                            "8",
+                            "-outfile",
+                            str(temp_jpg),
+                            str(png_file),
+                        ],
+                        temp_path=temp_jpg,
+                        final_path=stem.with_suffix(".jpg"),
+                        image_path=png_file,
                         runner=runner,
                         logger=logger,
                     )
-                    jpeg_steps.append(jpeg_result)
-                    if jpeg_result.status == StepStatus.FAILED:
-                        result.outputs.append(
-                            OutputResult(
-                                codec="jpeg",
-                                status=OutputStatus.FAILED,
-                                output_path=stem.with_suffix(".jpg"),
-                                steps=jpeg_steps,
-                                reason=jpeg_result.reason,
-                            )
-                        )
-                    else:
-                        publish_result = _publish_output(
-                            temp_path=temp_jpg,
-                            final_path=stem.with_suffix(".jpg"),
-                            image_path=png_file,
-                            codec="jpeg",
-                            logger=logger,
-                        )
-                        jpeg_steps.append(publish_result)
-                        result.outputs.append(
-                            OutputResult(
-                                codec="jpeg",
-                                status=(
-                                    OutputStatus.SUCCESS
-                                    if publish_result.status == StepStatus.SUCCESS
-                                    else OutputStatus.FAILED
-                                ),
-                                output_path=stem.with_suffix(".jpg"),
-                                steps=jpeg_steps,
-                                reason=publish_result.reason,
-                            )
-                        )
+                )
 
         if settings.codec_enabled.get("jpegxl"):
             missing = required_tools_missing("jpegxl", tool_map)
@@ -735,12 +649,10 @@ def convert_hdr(
     result = ImageConversionResult(source_path=png_file)
     stem = png_file.with_suffix("")
     temp_base = png_file.with_name(f"Tempfile_{uuid4().hex}")
-    temp_bmp = temp_base.with_suffix(".bmp")
-    temp_jpg = temp_base.with_suffix(".jpg")
     temp_jxl = temp_base.with_suffix(".jxl")
     temp_heic = temp_base.with_suffix(".heic")
     temp_avif = temp_base.with_suffix(".avif")
-    temp_files = [temp_bmp, temp_jpg, temp_jxl, temp_heic, temp_avif]
+    temp_files = [temp_jxl, temp_heic, temp_avif]
     _cleanup_temp_files(temp_files, logger)
 
     try:

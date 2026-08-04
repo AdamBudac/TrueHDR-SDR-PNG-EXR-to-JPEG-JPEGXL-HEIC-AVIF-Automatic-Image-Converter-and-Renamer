@@ -16,7 +16,7 @@ from typing import Dict, List, Optional
 # ---------------------------------------------------------------------------
 
 TOOLS_FOR_CODECS: Dict[str, List[str]] = {
-    "jpeg": ["ffmpeg", "cjpeg"],
+    "jpeg": ["cjpeg"],
     "jpegxl": ["cjxl"],
     "heic": ["heif-enc"],
     "avif": ["avifenc"],

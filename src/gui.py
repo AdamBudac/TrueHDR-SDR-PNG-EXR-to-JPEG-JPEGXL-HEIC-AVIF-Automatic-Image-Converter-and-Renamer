@@ -404,7 +404,6 @@ class MainWindow(QMainWindow):
         settings = load_settings_from_file(Path(file_path), self.logger)
         self.settings = settings
         self._apply_settings_to_ui(settings)
-        save_settings_to_file(settings, config_file())
         self.input_dir = Path(settings.last_input_dir) if settings.last_input_dir else None
         self._set_status("Settings loaded", "info")
 
@@ -420,10 +419,6 @@ class MainWindow(QMainWindow):
             self.input_dir = Path(dir_path)
             self._set_status("Image directory selected", "info")
             self.progress_bar.setValue(0)
-            # persist chosen dir for next run
-            s = self._collect_settings_from_ui()
-            s.last_input_dir = str(self.input_dir)
-            save_settings_to_file(s, config_file())
         else:
             if self.input_dir:
                 self._set_status("Image directory selected", "info")

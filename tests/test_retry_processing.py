@@ -24,7 +24,6 @@ from src.worker import ProcessingWorker
 
 
 ALL_TOOLS = {
-    "ffmpeg": True,
     "cjpeg": True,
     "cjxl": True,
     "heif-enc": True,
@@ -60,8 +59,6 @@ class ScriptedRunner:
     @staticmethod
     def _output_path(command: List[str]) -> Path:
         tool = command[0]
-        if tool == "ffmpeg":
-            return Path(command[-1])
         if tool == "cjpeg":
             return Path(command[command.index("-outfile") + 1])
         if tool == "cjxl":
@@ -119,7 +116,7 @@ def test_first_attempt_fails_and_second_attempt_succeeds(
     source = tmp_path / "photo.png"
     source.write_bytes(b"png")
     runner = ScriptedRunner(
-        {"ffmpeg": [_failure("temporary decoder failure"), None]}
+        {"cjpeg": [_failure("temporary encoder failure"), None]}
     )
 
     result = convert_sdr(
@@ -136,10 +133,10 @@ def test_first_attempt_fails_and_second_attempt_succeeds(
     assert jpeg.steps[0].attempts == 2
     assert len(jpeg.steps[0].failures) == 1
     assert [command[0] for command in runner.commands] == [
-        "ffmpeg",
-        "ffmpeg",
+        "cjpeg",
         "cjpeg",
     ]
+    assert runner.commands[0][-1] == str(source)
     assert source.with_suffix(".jpg").read_bytes() == b"fake output"
 
 
@@ -152,21 +149,21 @@ def test_partial_output_is_removed_before_retry(
     class PartialOutputRunner(ScriptedRunner):
         def __init__(self) -> None:
             super().__init__()
-            self.ffmpeg_attempts = 0
+            self.cjpeg_attempts = 0
 
         def run_cmd(self, command: List[str], logger: logging.Logger) -> None:
-            if command[0] != "ffmpeg":
+            if command[0] != "cjpeg":
                 return super().run_cmd(command, logger)
 
             self.commands.append(list(command))
-            self.ffmpeg_attempts += 1
+            self.cjpeg_attempts += 1
             output_path = self._output_path(command)
-            if self.ffmpeg_attempts == 1:
+            if self.cjpeg_attempts == 1:
                 output_path.write_bytes(b"partial")
-                raise _failure("failed after writing a partial BMP")
+                raise _failure("failed after writing a partial JPEG")
 
             assert not output_path.exists()
-            output_path.write_bytes(b"complete BMP")
+            output_path.write_bytes(b"complete JPEG")
 
     runner = PartialOutputRunner()
 
@@ -185,43 +182,26 @@ def test_partial_output_is_removed_before_retry(
     assert not list(tmp_path.glob("Tempfile_*"))
 
 
-def test_failed_bmp_skips_cjpeg_and_continues_with_next_codec(
+def test_cjpeg_receives_png_directly(
     tmp_path: Path, test_logger: logging.Logger
 ) -> None:
     source = tmp_path / "photo.png"
     source.write_bytes(b"png")
-    runner = ScriptedRunner(
-        {
-            "ffmpeg": [
-                _failure("decoder failure one"),
-                _failure("decoder failure two"),
-            ]
-        }
-    )
+    runner = ScriptedRunner()
 
     result = convert_sdr(
         source,
-        _settings("jpeg", "jpegxl"),
+        _settings("jpeg"),
         ALL_TOOLS,
         runner,
         test_logger,
     )
 
-    outputs = _output_by_codec(result)
-    assert outputs["jpeg"].status == OutputStatus.FAILED
-    assert [step.status for step in outputs["jpeg"].steps] == [
-        StepStatus.FAILED,
-        StepStatus.SKIPPED_DEPENDENCY,
-    ]
-    assert outputs["jpegxl"].status == OutputStatus.SUCCESS
-    assert result.status == ImageStatus.PARTIAL
-    assert [command[0] for command in runner.commands] == [
-        "ffmpeg",
-        "ffmpeg",
-        "cjxl",
-    ]
-    assert not source.with_suffix(".jpg").exists()
-    assert source.with_suffix(".jxl").exists()
+    jpeg = _output_by_codec(result)["jpeg"]
+    assert jpeg.status == OutputStatus.SUCCESS
+    assert len(runner.commands) == 1
+    assert runner.commands[0][0] == "cjpeg"
+    assert runner.commands[0][-1] == str(source)
 
 
 def test_failed_cjpeg_continues_with_next_codec(
@@ -248,11 +228,10 @@ def test_failed_cjpeg_continues_with_next_codec(
 
     outputs = _output_by_codec(result)
     assert outputs["jpeg"].status == OutputStatus.FAILED
-    assert outputs["jpeg"].steps[0].status == StepStatus.SUCCESS
-    assert outputs["jpeg"].steps[1].status == StepStatus.FAILED
+    assert outputs["jpeg"].steps[0].status == StepStatus.FAILED
+    assert outputs["jpeg"].steps[0].attempts == 2
     assert outputs["jpegxl"].status == OutputStatus.SUCCESS
     assert [command[0] for command in runner.commands] == [
-        "ffmpeg",
         "cjpeg",
         "cjpeg",
         "cjxl",
@@ -267,7 +246,7 @@ def test_interrupted_error_is_not_retried(
     source = tmp_path / "photo.png"
     source.write_bytes(b"png")
     runner = ScriptedRunner(
-        {"ffmpeg": [InterruptedError("cancelled by test")]}
+        {"cjpeg": [InterruptedError("cancelled by test")]}
     )
 
     with pytest.raises(InterruptedError, match="cancelled by test"):
@@ -279,7 +258,7 @@ def test_interrupted_error_is_not_retried(
             test_logger,
         )
 
-    assert [command[0] for command in runner.commands] == ["ffmpeg"]
+    assert [command[0] for command in runner.commands] == ["cjpeg"]
     assert not list(tmp_path.glob("Tempfile_*"))
 
 
@@ -293,7 +272,6 @@ def test_errors_log_contains_only_final_failures_with_command_and_stderr(
     attach_file_logger(test_logger, logging_log, errors_log)
     runner = ScriptedRunner(
         {
-            "ffmpeg": [_failure("transient decoder failure"), None],
             "cjpeg": [
                 _failure("final encoder failure one"),
                 _failure("final encoder failure two"),
@@ -312,10 +290,10 @@ def test_errors_log_contains_only_final_failures_with_command_and_stderr(
 
     main_content = logging_log.read_text(encoding="utf-8")
     error_content = errors_log.read_text(encoding="utf-8")
-    assert "transient decoder failure" in main_content
-    assert "transient decoder failure" not in error_content
+    assert "final encoder failure one" in main_content
+    assert "final encoder failure two" in main_content
     assert "COMMAND_FAILED" in error_content
-    assert "Stage: bmp_to_jpeg" in error_content
+    assert "Stage: png_to_jpeg" in error_content
     assert "Command: cjpeg" in error_content
     assert "Attempt 1 stderr:\nfinal encoder failure one" in error_content
     assert "Attempt 2 stderr:\nfinal encoder failure two" in error_content
@@ -330,7 +308,7 @@ def test_recovered_command_leaves_errors_log_empty(
     errors_log = tmp_path / "errors.log"
     attach_file_logger(test_logger, logging_log, errors_log)
     runner = ScriptedRunner(
-        {"ffmpeg": [_failure("transient decoder failure"), None]}
+        {"cjpeg": [_failure("transient encoder failure"), None]}
     )
 
     result = convert_sdr(
@@ -363,9 +341,9 @@ def test_processing_summary_counters_and_outcomes(tmp_path: Path) -> None:
                 status=OutputStatus.SUCCESS,
                 steps=[
                     StepResult(
-                        name="png_to_bmp",
+                        name="png_to_jpeg",
                         status=StepStatus.SUCCESS,
-                        command=("ffmpeg",),
+                        command=("cjpeg",),
                         attempts=2,
                     )
                 ],
@@ -380,16 +358,11 @@ def test_processing_summary_counters_and_outcomes(tmp_path: Path) -> None:
                 status=OutputStatus.FAILED,
                 steps=[
                     StepResult(
-                        name="png_to_bmp",
+                        name="png_to_jpeg",
                         status=StepStatus.FAILED,
-                        command=("ffmpeg",),
-                        attempts=2,
-                    ),
-                    StepResult(
-                        name="bmp_to_jpeg",
-                        status=StepStatus.SKIPPED_DEPENDENCY,
                         command=("cjpeg",),
-                    ),
+                        attempts=2,
+                    )
                 ],
             ),
             OutputResult(
@@ -449,7 +422,7 @@ def test_processing_summary_counters_and_outcomes(tmp_path: Path) -> None:
     assert summary.failed_commands == 2
     assert summary.retried_commands == 2
     assert summary.recovered_commands == 1
-    assert summary.dependency_skipped_commands == 1
+    assert summary.dependency_skipped_commands == 0
     assert summary.not_processed_images == 0
     assert summary.outcome == ProcessingOutcome.PARTIAL
 
@@ -461,7 +434,7 @@ def test_worker_continues_with_next_image_and_reaches_total_progress(
     (tmp_path / "b.png").write_bytes(b"png b")
     runner = ScriptedRunner(
         {
-            "ffmpeg": [
+            "cjpeg": [
                 _failure("a failed once"),
                 _failure("a failed twice"),
                 None,
@@ -484,9 +457,8 @@ def test_worker_continues_with_next_image_and_reaches_total_progress(
     summary = worker.process()
 
     assert [command[0] for command in runner.commands] == [
-        "ffmpeg",
-        "ffmpeg",
-        "ffmpeg",
+        "cjpeg",
+        "cjpeg",
         "cjpeg",
     ]
     assert summary.discovered_images == 2
@@ -494,7 +466,7 @@ def test_worker_continues_with_next_image_and_reaches_total_progress(
     assert summary.successful_images == 1
     assert summary.failed_images == 1
     assert summary.failed_commands == 1
-    assert summary.dependency_skipped_commands == 1
+    assert summary.dependency_skipped_commands == 0
     assert progress_updates == [(1, 2), (2, 2)]
     assert summary.outcome == ProcessingOutcome.PARTIAL
     assert not (tmp_path / "output" / "a.jpg").exists()

@@ -49,7 +49,7 @@ def fake_convert_hdr(png_file: Path, settings: AppSettings, tool_map: dict, runn
 def test_full_pipeline_integration(tmp_path: Path):
     """
     End-to-end integration test of the ProcessingWorker pipeline.
-    It mocks the actual external tool calls (ffmpeg, cjpeg...) to test
+    It mocks the actual external encoder calls (cjpeg, cjxl, etc.) to test
     the file discovery, renaming, sorting, and callback logic.
     """
     # 1. Prepare dummy input files

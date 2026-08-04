@@ -11,7 +11,7 @@ GUI and CLI application for converting, renaming, and sorting input PNG/EXR/JPG 
 - Renaming with prefix, numbering, auto/manual zerofill; HDR gets the `_HDR` suffix, BW gets `_BW`, copies get `_DuplicateXX`
 - Separate SDR/HDR processing; supports Color and Black & White (BW) variants
 - BW detection via `_BW` suffix or `-2` suffix (case-insensitive)
-- Detects availability of tools (`ffmpeg`, `cjpeg`, `cjxl`, `heif-enc`, `avifenc`) and auto-disables missing codec checkboxes
+- Detects availability of tools (`cjpeg`, `cjxl`, `heif-enc`, `avifenc`) and auto-disables missing codec checkboxes
 - Retries a failed external command once (two attempts total), then continues with the next independent codec and image if the command still fails
 - Stop button to cancel processing mid-run
 - Full CLI interface with argparse for automation / scripting
@@ -46,8 +46,7 @@ src/
   - `pytest==9.0.2`
   - `pyinstaller==6.19.0` (EXE build only)
 - **External tools in PATH:**
-  - `ffmpeg` – image conversion
-  - `cjpeg` – from `libjpeg-turbo` for JPEG export
+  - `cjpeg` – from `libjpeg-turbo` for direct SDR PNG-to-JPEG export
   - `cjxl` – part of `libjxl` for JPEG XL export
   - `heif-enc` – from `libheif` for HEIC export
   - `avifenc` – from `libavif` for AVIF export
@@ -152,7 +151,7 @@ EXR and JPG/JPEG HDR files are not converted — they are only copied and rename
 - After selecting a working directory, it creates `output/`, copies all `.png`, `.exr`, and HDR `.jpg`/`.jpeg` files from the root of that directory into `output/`, and works only there
 - Every failed external command is retried once with the same arguments, for a maximum of two attempts. If the second attempt also fails, the failed output is skipped and processing continues with the next independent codec and image.
 - Retry is command-scoped, not image-scoped: outputs already completed for the image are not encoded again. A partial temporary output is removed before retry, and temporary filenames are unique per image run.
-- SDR JPEG output has one explicit dependency: `ffmpeg` first creates an intermediate BMP and `cjpeg` then creates the JPEG. If BMP creation fails on both attempts, `cjpeg` is skipped for that image, while its other selected codecs and subsequent images continue normally.
+- SDR 8-bit PNG files are encoded directly to JPEG by `cjpeg` from `libjpeg-turbo`, without an intermediate image format or another conversion tool.
 - User cancellation is never retried or recorded as a conversion failure.
 - After a GUI run finishes, a separate modal **Processing summary** window reports image, output, command, retry, failure, and dependency-skip totals. A cancelled run additionally shows its cancellation state and the number of images not processed.
 - An overwrite dialog appears if `output/` is not empty
@@ -193,11 +192,10 @@ _Note: You do not need any external tools in your PATH to run the tests successf
 
 ## References
 
-- [ffmpeg](https://www.ffmpeg.org/) v8.0.1-full
-- [libjpeg-turbo](https://github.com/libjpeg-turbo/libjpeg-turbo) v3.1.3-vc-x64
-- [libjxl](https://github.com/libjxl/libjxl) v0.11.1 x64
-- [libheif](https://github.com/strukturag/libheif) v1.19.5 x64
-- [libavif](https://github.com/AOMediaCodec/libavif) v1.3.0 x64
+- [libjpeg-turbo](https://github.com/libjpeg-turbo/libjpeg-turbo) v3.2.0
+- [libjxl](https://github.com/libjxl/libjxl) v0.12.0
+- [libheif](https://github.com/strukturag/libheif) v1.20.2
+- [libavif](https://github.com/AOMediaCodec/libavif) v1.4.2
 
 _Note: The application should work fine with newer versions of these libraries as well._
 
